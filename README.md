@@ -1,7 +1,7 @@
 # Block
 
 [![Pub Version](https://img.shields.io/pub/v/block.svg)](https://pub.dev/packages/block)
-[![Build Status](https://github.com/medz/block/workflows/Dart/badge.svg)](https://github.com/medz/block/actions)
+[![Tests Status](https://github.com/medz/block/actions/workflows/test.yml/badge.svg)](https://github.com/medz/block/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 A flexible and efficient binary data block handling library for Dart.
