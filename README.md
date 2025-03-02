@@ -169,5 +169,8 @@ This package is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 <p align="center">Made with ❤️ By</p>
-
-[![Contributors](https://contrib.rocks/image?repo=medz/block)](https://github.com/odroe/prisma-dart/graphs/contributors)
+<p align="center">
+  <a href="https://github.com/medz/block/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=medz/block" alt="Contributors" />
+  </a>
+</p>
