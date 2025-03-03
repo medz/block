@@ -1,3 +1,11 @@
+## 0.0.3
+
+_Released: 2025-03-03_
+
+### Bug Fixes
+
+- Fix typo: renamed `formStream` method to `fromStream` for better API consistency
+
 ## 0.0.2
 
 _Released: 2025-03-03_

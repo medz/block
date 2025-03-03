@@ -1,6 +1,6 @@
 name: block
 description: A flexible and efficient binary data block handling library for Dart, supporting lazy loading, caching, and slicing of binary data.
-version: 0.0.2
+version: 0.0.3
 repository: https://github.com/medz/block
 
 topics:
