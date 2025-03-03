@@ -49,7 +49,7 @@ final bytesBlock = Block.fromBytes([
 ]);
 
 // From a stream
-final streamBlock = Block.formStream(
+final streamBlock = Block.fromStream(
   someStream, // Stream<Uint8List>
   expectedSize, // int
 );
@@ -105,7 +105,7 @@ Future<void> processLargeFile(String path) async {
   final fileSize = await file.length();
 
   // Create a block from the file's content
-  final block = Block.formStream(file.openRead(), fileSize);
+  final block = Block.fromStream(file.openRead(), fileSize);
 
   // Process the first 1MB
   final header = block.slice(0, 1024 * 1024);

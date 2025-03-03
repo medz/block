@@ -101,12 +101,12 @@ abstract mixin class Block {
   ///
   /// Example:
   /// ```dart
-  /// final streamBlock = Block.formStream(
+  /// final streamBlock = Block.fromStream(
   ///   file.openRead(),
   ///   file.lengthSync()
   /// );
   /// ```
-  factory Block.formStream(Stream<Uint8List> stream, int size) = _StreamBlock;
+  factory Block.fromStream(Stream<Uint8List> stream, int size) = _StreamBlock;
 
   /// Returns the total size of the block in bytes.
   ///

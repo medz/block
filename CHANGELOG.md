@@ -18,7 +18,7 @@ Initial stable release of the Block package.
   - `Block.empty()` - Create an empty block
   - `Block.fromString()` - Create from strings with encoding support
   - `Block.fromBytes()` - Create from existing Uint8List instances
-  - `Block.formStream()` - Create from byte streams
+  - `Block.fromStream()` - Create from byte streams
 - Data access methods:
   - `size` - Get block size in bytes
   - `stream()` - Access as a Stream<Uint8List>

@@ -331,7 +331,7 @@ void main() {
       ];
       final stream = Stream.fromIterable(chunks);
 
-      final block = Block.formStream(stream, 7);
+      final block = Block.fromStream(stream, 7);
       expect(block.size, equals(7));
 
       final result = await block.stream().toList();
@@ -346,7 +346,7 @@ void main() {
         Uint8List.fromList([4, 5, 6, 7]),
       ];
       final stream = Stream.fromIterable(chunks);
-      final block = Block.formStream(stream, 10);
+      final block = Block.fromStream(stream, 10);
 
       expect(
         () => block.stream().toList(),
@@ -367,7 +367,7 @@ void main() {
       ];
       final stream = Stream.fromIterable(chunks);
 
-      final block = Block.formStream(stream, 5);
+      final block = Block.fromStream(stream, 5);
 
       // 先消费成字节
       final bytes = await block.bytes();
@@ -380,7 +380,7 @@ void main() {
 
     test('Stream-based block with empty stream', () async {
       final stream = Stream<Uint8List>.fromIterable([]);
-      final block = Block.formStream(stream, 0);
+      final block = Block.fromStream(stream, 0);
 
       final bytes = await block.bytes();
       expect(bytes.length, equals(0));
@@ -394,7 +394,7 @@ void main() {
       ];
       final stream = Stream.fromIterable(chunks);
 
-      final block = Block.formStream(stream, 5);
+      final block = Block.fromStream(stream, 5);
 
       // 使用 bytes() 应当正确合并所有块
       final bytes = await block.bytes();
