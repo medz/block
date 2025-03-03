@@ -1,6 +1,12 @@
+## 0.0.2
+
+_Released: 2025-03-03_
+
+Improve code comments
+
 ## 0.0.1
 
-_Released: 2023-10-05_
+_Released: 2025-03-02_
 
 Initial stable release of the Block package.
 
