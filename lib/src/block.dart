@@ -1111,6 +1111,18 @@ class Block {
       _sliceLength = 0, // 稍后计算
       _memoryCost = _calculateMemoryCost(parts),
       _dataProcessed = false {
+    // 验证每个part的类型
+    for (final part in parts) {
+      if (!(part is String ||
+          part is Uint8List ||
+          part is ByteData ||
+          part is Block)) {
+        throw ArgumentError(
+          'Unsupported part type: ${part?.runtimeType}. '
+          'Supported types are String, Uint8List, ByteData, and Block.',
+        );
+      }
+    }
     _registerMemoryUsage();
   }
 
