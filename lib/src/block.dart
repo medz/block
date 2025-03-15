@@ -2263,7 +2263,7 @@ class Block {
       // 计算总长度
       _sliceLength = _calculateChunksSize(_chunks);
       // 由于_rawParts是final无法设为null，我们用清空内容的方式释放资源
-      (_rawParts as List).clear();
+      (_rawParts).clear();
         }
 
     _dataProcessed = true;

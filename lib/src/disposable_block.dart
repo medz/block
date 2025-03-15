@@ -5,7 +5,6 @@
 
 import 'dart:typed_data';
 import 'package:block/block.dart';
-import 'memory_manager.dart';
 
 /// A disposable extension of Block that provides explicit memory management.
 ///

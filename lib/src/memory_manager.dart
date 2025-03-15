@@ -6,7 +6,6 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:core';
-import 'dart:typed_data';
 
 /// 跟踪信息，关联Block对象与其数据块
 class _BlockTrackingInfo {
