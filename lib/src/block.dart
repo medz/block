@@ -15,7 +15,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
-import 'dart:math' as math;
 
 import 'deferred_operation.dart';
 import 'memory_manager.dart';
@@ -2264,7 +2263,7 @@ class Block {
       _sliceLength = _calculateChunksSize(_chunks);
       // 由于_rawParts是final无法设为null，我们用清空内容的方式释放资源
       (_rawParts).clear();
-        }
+    }
 
     _dataProcessed = true;
   }
