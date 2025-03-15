@@ -12,27 +12,50 @@ class DuplicateDataCreationBenchmark extends MemoryBenchmark {
   static const int _blockSize = 1 * 1024 * 1024; // 1MB
   static const int _blockCount = 10; // 创建10个相同的块
   Uint8List? _data;
+  final List<Block> _blocks = [];
 
   DuplicateDataCreationBenchmark()
     : super('Duplicate Block Creation (10x 1MB)');
 
   @override
-  void setUp() {
-    super.setUp();
+  void setup() {
+    super.setup();
     _data = TestDataGenerator.generateSequentialData(_blockSize);
   }
 
   @override
   void run() {
     if (_data != null) {
+      _blocks.clear();
       // 创建10个包含相同数据的Block
       for (int i = 0; i < _blockCount; i++) {
-        Block([_data!]);
+        final block = Block([_data!]);
+        // 触发数据处理
+        block.size;
+        _blocks.add(block);
+        // 添加到引用列表，防止垃圾回收
+        addBlockReference(block);
       }
     }
 
+    // 强制更新内存统计
+    Block.forceUpdateMemoryStatistics();
+
     // 记录内存使用情况
     recordMemoryPoint();
+
+    // 打印数据去重统计
+    print('Duplicate Count: ${Block.getDataDeduplicationDuplicateCount()}');
+    print('Saved Memory: ${Block.getDataDeduplicationSavedMemory()} bytes');
+  }
+
+  @override
+  void teardown() {
+    // 清理资源
+    _blocks.clear();
+    _data = null;
+    // 父类会清理引用，允许垃圾回收
+    super.teardown();
   }
 }
 
@@ -40,12 +63,13 @@ class UniqueDataCreationBenchmark extends MemoryBenchmark {
   static const int _blockSize = 1 * 1024 * 1024; // 1MB
   static const int _blockCount = 10; // 创建10个不同的块
   List<Uint8List>? _dataList;
+  final List<Block> _blocks = [];
 
   UniqueDataCreationBenchmark() : super('Unique Block Creation (10x 1MB)');
 
   @override
-  void setUp() {
-    super.setUp();
+  void setup() {
+    super.setup();
     _dataList = [];
     for (int i = 0; i < _blockCount; i++) {
       // 每个块都有稍微不同的数据
@@ -58,14 +82,37 @@ class UniqueDataCreationBenchmark extends MemoryBenchmark {
   @override
   void run() {
     if (_dataList != null) {
+      _blocks.clear();
       // 创建10个包含不同数据的Block
       for (int i = 0; i < _blockCount; i++) {
-        Block([_dataList![i]]);
+        final block = Block([_dataList![i]]);
+        // 触发数据处理
+        block.size;
+        _blocks.add(block);
+        // 添加到引用列表，防止垃圾回收
+        addBlockReference(block);
       }
     }
 
+    // 强制更新内存统计
+    Block.forceUpdateMemoryStatistics();
+
     // 记录内存使用情况
     recordMemoryPoint();
+
+    // 打印数据去重统计
+    print('Duplicate Count: ${Block.getDataDeduplicationDuplicateCount()}');
+    print('Saved Memory: ${Block.getDataDeduplicationSavedMemory()} bytes');
+  }
+
+  @override
+  void teardown() {
+    // 清理资源
+    _blocks.clear();
+    _dataList?.clear();
+    _dataList = null;
+    // 父类会清理引用，允许垃圾回收
+    super.teardown();
   }
 }
 
@@ -74,13 +121,14 @@ class DeduplicationMetricsBenchmark extends MemoryBenchmark {
   static const int _blockCount = 20; // 创建20个块，其中10个相同
   Uint8List? _sharedData;
   List<Uint8List>? _uniqueDataList;
+  final List<Block> _blocks = [];
 
   DeduplicationMetricsBenchmark()
     : super('Deduplication Metrics (20x 1MB, 50% duplicates)');
 
   @override
-  void setUp() {
-    super.setUp();
+  void setup() {
+    super.setup();
     _sharedData = TestDataGenerator.generateSequentialData(_blockSize);
     _uniqueDataList = [];
     for (int i = 0; i < _blockCount / 2; i++) {
@@ -93,23 +141,50 @@ class DeduplicationMetricsBenchmark extends MemoryBenchmark {
   @override
   void run() {
     if (_sharedData != null && _uniqueDataList != null) {
+      _blocks.clear();
       // 创建10个使用共享数据的Block
       for (int i = 0; i < _blockCount / 2; i++) {
-        Block([_sharedData!]);
+        final block = Block([_sharedData!]);
+        // 触发数据处理
+        block.size;
+        _blocks.add(block);
+        // 添加到引用列表，防止垃圾回收
+        addBlockReference(block);
       }
 
       // 创建10个使用不同数据的Block
       for (int i = 0; i < _blockCount / 2; i++) {
-        Block([_uniqueDataList![i]]);
+        final block = Block([_uniqueDataList![i]]);
+        // 触发数据处理
+        block.size;
+        _blocks.add(block);
+        // 添加到引用列表，防止垃圾回收
+        addBlockReference(block);
       }
     }
 
+    // 强制更新内存统计
+    Block.forceUpdateMemoryStatistics();
+
     // 记录最终指标
     recordMemoryPoint();
+
+    // 打印详细的去重报告
+    print('Duplicate Count: ${Block.getDataDeduplicationDuplicateCount()}');
     final report = Block.getDataDeduplicationReport();
     print('Deduplication Report: $report');
     print('Saved Memory: ${Block.getDataDeduplicationSavedMemory()} bytes');
-    print('Duplicate Count: ${Block.getDataDeduplicationDuplicateCount()}');
+  }
+
+  @override
+  void teardown() {
+    // 清理资源
+    _blocks.clear();
+    _sharedData = null;
+    _uniqueDataList?.clear();
+    _uniqueDataList = null;
+    // 父类会清理引用，允许垃圾回收
+    super.teardown();
   }
 }
 

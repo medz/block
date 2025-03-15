@@ -10,62 +10,78 @@ import 'package:block/block.dart';
 
 /// 定义内存使用基准测试接口
 abstract class MemoryBenchmark extends BenchmarkBase {
-  /// 测试执行前的内存使用量
-  int _memoryBefore = 0;
+  /// 内存使用点记录
+  final List<int> _memoryPoints = [];
 
-  /// 测试执行后的内存使用量
-  int _memoryAfter = 0;
-
-  /// 记录Block总内存使用量历史
-  final List<int> _memoryUsageHistory = [];
-
-  /// 记录活跃Block数量历史
-  final List<int> _activeBlockHistory = [];
+  /// 保存当前测试的 Block 对象，防止垃圾回收
+  final List<Block> _benchmarkBlocks = [];
 
   /// 创建内存基准测试
   MemoryBenchmark(String name) : super(name);
 
   @override
-  void setUp() {
+  void setup() {
+    // 重置数据去重统计
+    Block.resetDataDeduplication();
+
     // 记录初始内存使用量
-    _memoryBefore = Block.totalMemoryUsage;
-    _memoryUsageHistory.clear();
-    _activeBlockHistory.clear();
-    _memoryUsageHistory.add(_memoryBefore);
-    _activeBlockHistory.add(Block.activeBlockCount);
+    _memoryPoints.clear();
+    _memoryPoints.add(Block.totalMemoryUsage);
+
+    // 清空 Block 引用列表
+    _benchmarkBlocks.clear();
+  }
+
+  /// 添加 Block 对象到引用列表，防止垃圾回收
+  void addBlockReference(Block block) {
+    _benchmarkBlocks.add(block);
+  }
+
+  /// 记录当前内存使用点
+  void recordMemoryPoint() {
+    _memoryPoints.add(Block.totalMemoryUsage);
   }
 
   @override
-  void tearDown() {
-    // 记录测试后内存使用量
-    _memoryAfter = Block.totalMemoryUsage;
-    _memoryUsageHistory.add(_memoryAfter);
-    _activeBlockHistory.add(Block.activeBlockCount);
+  void teardown() {
+    // 强制更新内存统计
+    Block.forceUpdateMemoryStatistics();
 
-    // 输出内存使用情况
+    // 确保在结束时记录内存点
+    recordMemoryPoint();
+
+    // 打印内存使用情况
+    print('DEBUG: Memory Usage: ${Block.totalMemoryUsage} bytes');
+    print('DEBUG: Active Blocks: ${Block.activeBlockCount}');
     print(
-      'Memory usage: before=${_memoryBefore} bytes, after=${_memoryAfter} bytes',
+      'DEBUG: Peak Memory: ${_memoryPoints.isNotEmpty ? _memoryPoints.reduce((a, b) => a > b ? a : b) : 0} bytes',
     );
-    print('Memory diff: ${_memoryAfter - _memoryBefore} bytes');
-    print('Active blocks: ${Block.activeBlockCount}');
+    print('DEBUG: Data Deduplication:');
+    print(
+      'DEBUG:   Duplicate Count: ${Block.getDataDeduplicationDuplicateCount()}',
+    );
+    print(
+      'DEBUG:   Saved Memory: ${Block.getDataDeduplicationSavedMemory()} bytes',
+    );
+
+    // 清空 Block 引用，允许垃圾回收
+    _benchmarkBlocks.clear();
+
+    // 子类应在调用super.teardown()之前清理自己的资源
+    super.teardown();
+  }
+
+  /// 获取内存使用情况
+  int get memoryUsage {
+    return _memoryPoints.isNotEmpty ? _memoryPoints.last : 0;
   }
 
   /// 获取最大内存使用量
-  int get peakMemoryUsage =>
-      _memoryUsageHistory.isEmpty
-          ? 0
-          : _memoryUsageHistory.reduce((a, b) => a > b ? a : b);
-
-  /// 获取最大活跃Block数量
-  int get peakActiveBlocks =>
-      _activeBlockHistory.isEmpty
-          ? 0
-          : _activeBlockHistory.reduce((a, b) => a > b ? a : b);
-
-  /// 在测试执行过程中记录内存使用点
-  void recordMemoryPoint() {
-    _memoryUsageHistory.add(Block.totalMemoryUsage);
-    _activeBlockHistory.add(Block.activeBlockCount);
+  int get peakMemoryUsage {
+    if (_memoryPoints.isEmpty) {
+      return 0;
+    }
+    return _memoryPoints.reduce((a, b) => a > b ? a : b);
   }
 }
 
@@ -114,17 +130,25 @@ class TestDataGenerator {
 
 /// 打印基准测试结果表格
 void printBenchmarkResultsTable(List<BenchmarkBase> benchmarks) {
-  // 标题行
-  print('| Benchmark | Score (μs) | Memory Usage (bytes) |');
-  print('|-----------|------------|---------------------|');
+  print('');
+  print(
+    '| Benchmark | Score (μs) | Memory Usage (bytes) | Saved Memory (bytes) |',
+  );
+  print(
+    '|-----------|------------|----------------------|----------------------|',
+  );
 
-  // 数据行
   for (final benchmark in benchmarks) {
     final score = benchmark.measure();
     final memoryUsage =
         benchmark is MemoryBenchmark ? '${benchmark.peakMemoryUsage}' : 'N/A';
-
-    print('| ${benchmark.name} | ${score.toStringAsFixed(2)} | $memoryUsage |');
+    final savedMemory =
+        benchmark is MemoryBenchmark
+            ? '${Block.getDataDeduplicationSavedMemory()}'
+            : 'N/A';
+    print(
+      '| ${benchmark.name} | ${score.toStringAsFixed(2)} | $memoryUsage | $savedMemory |',
+    );
   }
 }
 

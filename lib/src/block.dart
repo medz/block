@@ -432,6 +432,34 @@ class _DataStore {
       'duplicateBlockCount': _duplicateBlockCount,
     };
   }
+
+  /// 更新内存统计数据
+  ///
+  /// 这个方法会重新计算所有内存统计数据，确保它们的准确性。
+  /// 主要用于测试和基准测试。
+  void updateStatistics() {
+    // 重置统计数据
+    _totalSavedMemory = 0;
+    _duplicateBlockCount = 0;
+
+    // 重新计算统计数据
+    for (final entry in _store.values) {
+      if (entry.refCount > 1) {
+        // 对于每个引用计数大于1的数据块，计算节省的内存
+        _totalSavedMemory += entry.data.length * (entry.refCount - 1);
+        _duplicateBlockCount += entry.refCount - 1;
+      }
+    }
+
+    // 打印详细的统计信息，帮助调试
+    print('DEBUG: _DataStore statistics:');
+    print('  Store size: ${_store.length}');
+    for (final entry in _store.entries) {
+      print(
+        '  - Hash: ${entry.key}, RefCount: ${entry.value.refCount}, Size: ${entry.value.data.length}',
+      );
+    }
+  }
 }
 
 /// 共享数据结构，包含数据和引用计数
@@ -1270,7 +1298,9 @@ class Block {
     final List<Uint8List> allBytes = [];
     for (final part in parts) {
       final Uint8List bytes = _convertPartToBytes(part);
-      allBytes.add(bytes);
+      // 使用 _DataStore.store 方法存储数据，以便跟踪数据去重
+      final storedBytes = _DataStore.instance.store(bytes);
+      allBytes.add(storedBytes);
     }
 
     // Optimize for small data (< 1MB) by keeping it as a single chunk
@@ -1310,7 +1340,7 @@ class Block {
 
           final chunk = Uint8List(chunkSize);
           chunk.setRange(0, chunkSize, bytes, offset);
-          normalizedParts.add(chunk);
+          normalizedParts.add(_DataStore.instance.store(chunk));
           offset += chunkSize;
         }
       } else {
@@ -1350,7 +1380,7 @@ class Block {
 
       // If chunk is full, finalize it
       if (currentSize == defaultChunkSize) {
-        chunks.add(currentChunk);
+        chunks.add(_DataStore.instance.store(currentChunk));
         currentChunk = null;
         currentSize = 0;
       }
@@ -1361,7 +1391,7 @@ class Block {
       // Create right-sized final chunk
       final finalChunk = Uint8List(currentSize);
       finalChunk.setRange(0, currentSize, currentChunk, 0);
-      chunks.add(finalChunk);
+      chunks.add(_DataStore.instance.store(finalChunk));
     }
 
     return chunks;
@@ -1964,5 +1994,28 @@ class Block {
   /// 重置数据去重统计
   static void resetDataDeduplication() {
     _DataStore.instance.resetStatistics();
+  }
+
+  /// 强制更新内存统计数据
+  ///
+  /// 这个方法主要用于测试和基准测试，强制更新内存统计数据。
+  /// 在正常使用中不需要调用此方法。
+  ///
+  /// 注意：此方法不会触发垃圾回收，只会更新已知的内存统计数据。
+  static void forceUpdateMemoryStatistics() {
+    // 这里不做实际的更新，因为内存统计是通过引用计数和finalizer自动更新的
+    // 但我们可以触发一些内部操作，如清理未引用的数据
+    _DataStore.instance.cleanUnreferencedData();
+
+    // 更新数据去重统计
+    _DataStore.instance.updateStatistics();
+
+    // 打印当前内存统计，帮助调试
+    print('DEBUG: Current memory statistics:');
+    print('  Total memory usage: $_totalMemoryUsage bytes');
+    print('  Active block count: $_activeBlockCount');
+    print('  Data deduplication:');
+    print('    Duplicate count: ${_DataStore.instance.duplicateBlockCount}');
+    print('    Saved memory: ${_DataStore.instance.totalSavedMemory} bytes');
   }
 }
