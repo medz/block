@@ -14,6 +14,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+/// 用于跟踪Block内存使用的辅助类
+class _BlockMemoryTracker {
+  final int memoryCost;
+
+  _BlockMemoryTracker(this.memoryCost);
+}
+
 /// A Block object represents an immutable, raw data file-like object.
 ///
 /// This is a pure Dart implementation inspired by the Web API Blob.
@@ -37,8 +44,106 @@ class Block {
   /// For slices: length of this slice in bytes
   final int _sliceLength;
 
+  /// 当前Block实例的内存成本（以字节为单位）
+  final int _memoryCost;
+
+  /// 静态内存统计：跟踪所有Block实例的总内存使用量
+  static int _totalMemoryUsage = 0;
+
+  /// 静态内存统计：跟踪活跃Block实例数量
+  static int _activeBlockCount = 0;
+
+  /// 获取所有Block实例的当前总内存使用量（以字节为单位）
+  static int get totalMemoryUsage => _totalMemoryUsage;
+
+  /// 获取当前活跃的Block实例数量
+  static int get activeBlockCount => _activeBlockCount;
+
+  /// 获取当前Block实例的内存使用成本（以字节为单位）
+  int get memoryCost => _memoryCost;
+
+  /// 获取内存使用统计报告
+  ///
+  /// 返回一个Map，包含当前Block实例和整体内存使用情况的详细信息
+  ///
+  /// 示例:
+  /// ```dart
+  /// final report = block.getMemoryReport();
+  /// print('Block size: ${report['size']} bytes');
+  /// print('Memory usage: ${report['memoryCost']} bytes');
+  /// ```
+  Map<String, dynamic> getMemoryReport() {
+    return {
+      'size': _size,
+      'memoryCost': _memoryCost,
+      'isSlice': _parent != null,
+      'hasMultipleChunks': _chunks.length > 1,
+      'chunksCount': _chunks.length,
+    };
+  }
+
+  /// 获取全局内存使用统计报告
+  ///
+  /// 返回一个Map，包含所有Block实例的内存使用情况
+  ///
+  /// 示例:
+  /// ```dart
+  /// final report = Block.getGlobalMemoryReport();
+  /// print('Total memory usage: ${report['totalMemoryUsage']} bytes');
+  /// print('Active blocks: ${report['activeBlockCount']}');
+  /// ```
+  static Map<String, dynamic> getGlobalMemoryReport() {
+    return {
+      'totalMemoryUsage': _totalMemoryUsage,
+      'activeBlockCount': _activeBlockCount,
+      'averageBlockSize':
+          _activeBlockCount > 0 ? _totalMemoryUsage / _activeBlockCount : 0,
+    };
+  }
+
+  /// 注册一个在需要减少内存使用时执行的回调
+  ///
+  /// 这是一个静态API，允许应用程序在内存压力大时得到通知并采取行动。
+  /// 当内存使用量达到指定的阈值时，回调函数将被调用。
+  ///
+  /// 参数:
+  /// - callback: 在内存压力超过阈值时调用的函数
+  /// - thresholdBytes: 触发回调的内存使用阈值（字节）
+  ///
+  /// 返回一个用于取消订阅的函数
+  ///
+  /// 示例:
+  /// ```dart
+  /// final cancel = Block.onMemoryPressure(() {
+  ///   // 执行内存清理操作
+  ///   print('Memory pressure detected!');
+  /// }, thresholdBytes: 100 * 1024 * 1024);
+  ///
+  /// // 稍后取消订阅
+  /// cancel();
+  /// ```
+  static Function onMemoryPressure(
+    void Function() callback, {
+    required int thresholdBytes,
+  }) {
+    final periodicTimer = Timer.periodic(Duration(seconds: 5), (timer) {
+      if (_totalMemoryUsage > thresholdBytes) {
+        callback();
+      }
+    });
+
+    return () => periodicTimer.cancel();
+  }
+
   /// The default chunk size for segmented storage (1MB)
   static const int defaultChunkSize = 1024 * 1024;
+
+  /// 用于finalizer的回调函数
+  static final _finalizer = Finalizer<_BlockMemoryTracker>((tracker) {
+    // 当Block被垃圾回收时，减少总内存使用量统计
+    _totalMemoryUsage -= tracker.memoryCost;
+    _activeBlockCount--;
+  });
 
   /// Creates a new Block consisting of an optional array of parts and a MIME type.
   ///
@@ -70,7 +175,10 @@ class Block {
       _type = type,
       _parent = null,
       _startOffset = 0,
-      _sliceLength = _calculateTotalSize(parts);
+      _sliceLength = _calculateTotalSize(parts),
+      _memoryCost = _calculateMemoryCost(parts) {
+    _registerMemoryUsage();
+  }
 
   /// Internal constructor for creating Block slices
   Block._slice(
@@ -80,13 +188,76 @@ class Block {
     required String type,
   }) : _chunks = [],
        _size = _sliceLength,
-       _type = type;
+       _type = type,
+       _memoryCost = _calculateSliceMemoryCost(_sliceLength) {
+    _registerMemoryUsage();
+  }
 
   /// Internal constructor for creating Block from explicit chunks
   Block._fromChunks(this._chunks, this._size, this._type)
     : _parent = null,
       _startOffset = 0,
-      _sliceLength = _size;
+      _sliceLength = _size,
+      _memoryCost = _calculateChunksMemoryCost(_chunks) {
+    _registerMemoryUsage();
+  }
+
+  // 注册内存使用并设置finalizer
+  void _registerMemoryUsage() {
+    // 更新全局内存统计
+    _totalMemoryUsage += _memoryCost;
+    _activeBlockCount++;
+
+    // 注册finalizer以在GC时减少内存统计
+    _finalizer.attach(this, _BlockMemoryTracker(_memoryCost), detach: this);
+  }
+
+  /// 计算所有部分的总内存成本（包括元数据开销）
+  static int _calculateMemoryCost(List<dynamic> parts) {
+    if (parts.isEmpty) {
+      return _blockInstanceBaseSize;
+    }
+
+    int memoryCost = _blockInstanceBaseSize;
+    for (final part in parts) {
+      if (part is String) {
+        // 字符串的UTF-8编码后大小
+        memoryCost += utf8.encode(part).length;
+      } else if (part is Uint8List) {
+        memoryCost += part.length;
+      } else if (part is ByteData) {
+        memoryCost += part.lengthInBytes;
+      } else if (part is Block) {
+        // 对于Block部分，不重复计算内存成本，
+        // 因为原始Block已经计算过它的内存使用
+        // 但我们需要添加引用的成本
+        memoryCost += _blockReferenceSize;
+      }
+    }
+    return memoryCost;
+  }
+
+  /// 计算切片的内存成本
+  static int _calculateSliceMemoryCost(int sliceLength) {
+    // 切片的内存成本包括基本的Block实例大小和对父Block的引用
+    return _blockInstanceBaseSize + _blockReferenceSize;
+  }
+
+  /// 计算chunks的内存成本
+  static int _calculateChunksMemoryCost(List<Uint8List> chunks) {
+    int memoryCost = _blockInstanceBaseSize;
+    for (final chunk in chunks) {
+      memoryCost += chunk.length;
+    }
+    return memoryCost;
+  }
+
+  // Block实例的基本大小（估计值，包含实例字段和内部元数据）
+  // 在Dart中实际内存使用很难精确计算，这是一个估计值
+  static const int _blockInstanceBaseSize = 120;
+
+  // Block引用的内存成本（估计值）
+  static const int _blockReferenceSize = 8;
 
   /// Calculate the total size of all parts
   static int _calculateTotalSize(List<dynamic> parts) {

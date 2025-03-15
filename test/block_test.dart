@@ -245,4 +245,96 @@ void main() {
       }
     });
   });
+
+  group('Memory usage tracking', () {
+    test('tracks memory cost for new blocks', () {
+      // 记录当前总内存使用量
+      final initialTotalMemory = Block.totalMemoryUsage;
+      final initialBlockCount = Block.activeBlockCount;
+
+      // 创建一个精确大小的数据块
+      final int dataSize = 10000;
+      final originalData = Uint8List(dataSize);
+      for (int i = 0; i < originalData.length; i++) {
+        originalData[i] = i % 256;
+      }
+
+      // 创建Block并验证内存成本
+      final block = Block([originalData]);
+
+      // 验证内存成本包含数据大小和Block实例开销
+      expect(block.memoryCost, greaterThan(dataSize));
+
+      // 验证全局内存统计增加
+      expect(Block.totalMemoryUsage, greaterThan(initialTotalMemory));
+      expect(Block.activeBlockCount, equals(initialBlockCount + 1));
+
+      // 获取并验证内存报告
+      final report = block.getMemoryReport();
+      expect(report['size'], equals(dataSize));
+      expect(report['memoryCost'], equals(block.memoryCost));
+      expect(report['isSlice'], equals(false));
+    });
+
+    test('tracks memory cost for slices', () {
+      // 创建一个原始数据块
+      final originalData = Uint8List(100000);
+      final originalBlock = Block([originalData]);
+
+      // 记录创建切片前的内存使用
+      final beforeSliceMemory = Block.totalMemoryUsage;
+      final beforeSliceCount = Block.activeBlockCount;
+
+      // 创建切片
+      final slice = originalBlock.slice(10000, 50000);
+
+      // 验证切片的内存成本比实际数据小得多（因为它只引用原始数据）
+      expect(slice.memoryCost, lessThan(40000)); // 40000是切片数据大小
+
+      // 验证全局内存统计变化
+      expect(Block.totalMemoryUsage, greaterThan(beforeSliceMemory));
+      expect(Block.activeBlockCount, equals(beforeSliceCount + 1));
+
+      // 验证内存报告
+      final report = slice.getMemoryReport();
+      expect(report['size'], equals(40000));
+      expect(report['isSlice'], equals(true));
+    });
+
+    test('provides global memory usage report', () {
+      // 创建几个Block实例
+      final blocks = <Block>[];
+      for (int i = 0; i < 5; i++) {
+        blocks.add(Block([Uint8List(10000 * (i + 1))]));
+      }
+
+      // 获取全局内存报告
+      final report = Block.getGlobalMemoryReport();
+
+      // 验证报告内容
+      expect(report['totalMemoryUsage'], greaterThan(0));
+      expect(report['activeBlockCount'], greaterThanOrEqualTo(5));
+      expect(report['averageBlockSize'], greaterThan(0));
+    });
+
+    test('provides memory pressure callbacks', () async {
+      // 设置一个较低的阈值
+      int callbackInvocations = 0;
+      final lowThreshold = 1; // 1字节，确保会触发
+
+      // 注册内存压力回调
+      final cancel = Block.onMemoryPressure(() {
+        callbackInvocations++;
+      }, thresholdBytes: lowThreshold);
+
+      // 等待足够长的时间让回调被调用
+      await Future.delayed(Duration(seconds: 6));
+
+      // 验证回调已被调用
+      expect(callbackInvocations, greaterThan(0));
+
+      // 取消订阅
+      cancel();
+    });
+  });
 }
