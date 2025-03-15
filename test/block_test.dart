@@ -337,4 +337,129 @@ void main() {
       cancel();
     });
   });
+
+  group('Memory pressure response', () {
+    test('sets memory usage limit', () {
+      // 设置10MB限制
+      Block.setMemoryUsageLimit(10 * 1024 * 1024);
+      expect(Block.memoryUsageLimit, equals(10 * 1024 * 1024));
+
+      // 移除限制
+      Block.setMemoryUsageLimit(null);
+      expect(Block.memoryUsageLimit, isNull);
+    });
+
+    test('registers callbacks for memory pressure levels', () {
+      int lowCallCount = 0;
+      int mediumCallCount = 0;
+      int highCallCount = 0;
+
+      // 注册不同级别的回调
+      final cancelLow = Block.onMemoryPressureLevel(() {
+        lowCallCount++;
+      }, level: MemoryPressureLevel.low);
+
+      final cancelMedium = Block.onMemoryPressureLevel(() {
+        mediumCallCount++;
+      }, level: MemoryPressureLevel.medium);
+
+      final cancelHigh = Block.onMemoryPressureLevel(() {
+        highCallCount++;
+      }, level: MemoryPressureLevel.high);
+
+      // 手动触发高级内存压力
+      Block.triggerMemoryPressure(MemoryPressureLevel.high);
+
+      // 高级内存压力也应该触发中级和低级内存压力回调
+      expect(highCallCount, equals(1));
+      expect(mediumCallCount, equals(1));
+      expect(lowCallCount, equals(1));
+
+      // 手动触发中级内存压力
+      Block.triggerMemoryPressure(MemoryPressureLevel.medium);
+
+      // 中级内存压力应该触发中级和低级回调，但不触发高级回调
+      expect(highCallCount, equals(1)); // 不变
+      expect(mediumCallCount, equals(2));
+      expect(lowCallCount, equals(2));
+
+      // 取消订阅
+      cancelLow();
+      cancelMedium();
+      cancelHigh();
+
+      // 再次触发，计数不应该变化
+      Block.triggerMemoryPressure(MemoryPressureLevel.critical);
+      expect(highCallCount, equals(1));
+      expect(mediumCallCount, equals(2));
+      expect(lowCallCount, equals(2));
+    });
+
+    test('auto-detects memory pressure levels based on usage limit', () {
+      // 设置非常低的内存限制，以便当前内存使用就能触发压力
+      final smallLimit = Block.totalMemoryUsage + 100; // 比当前使用量大100字节
+      Block.setMemoryUsageLimit(smallLimit);
+
+      // 当设置了接近当前使用量的限制时，应该有某种级别的内存压力
+      expect(Block.currentMemoryPressureLevel, isNot(MemoryPressureLevel.none));
+
+      // 创建更多Block以增加内存使用
+      final data = Uint8List(10000);
+      final blocks = <Block>[];
+      for (int i = 0; i < 10; i++) {
+        blocks.add(Block([data]));
+      }
+
+      // 现在应该有更高的内存压力级别
+      expect(
+        Block.currentMemoryPressureLevel.index,
+        greaterThanOrEqualTo(MemoryPressureLevel.medium.index),
+      );
+
+      // 清理
+      Block.setMemoryUsageLimit(null);
+    });
+
+    test('reduces memory usage on pressure', () {
+      // 当前版本的实现还没有实际的内存减少机制，
+      // 所以我们只测试API是否存在并返回预期的值
+      expect(Block.reduceMemoryUsage(), equals(0));
+
+      // 未来实现真正的内存减少机制后，可以添加更多测试
+    });
+
+    test('reports correct memory pressure level', () {
+      // 重置内存限制
+      Block.setMemoryUsageLimit(null);
+      expect(
+        Block.currentMemoryPressureLevel,
+        equals(MemoryPressureLevel.none),
+      );
+
+      // 依次测试各个压力级别
+      Block.triggerMemoryPressure(MemoryPressureLevel.low);
+      expect(Block.currentMemoryPressureLevel, equals(MemoryPressureLevel.low));
+
+      Block.triggerMemoryPressure(MemoryPressureLevel.medium);
+      expect(
+        Block.currentMemoryPressureLevel,
+        equals(MemoryPressureLevel.medium),
+      );
+
+      Block.triggerMemoryPressure(MemoryPressureLevel.high);
+      expect(
+        Block.currentMemoryPressureLevel,
+        equals(MemoryPressureLevel.high),
+      );
+
+      Block.triggerMemoryPressure(MemoryPressureLevel.critical);
+      expect(
+        Block.currentMemoryPressureLevel,
+        equals(MemoryPressureLevel.critical),
+      );
+
+      // 重置回正常状态
+      Block.triggerMemoryPressure(MemoryPressureLevel.none);
+    });
+  });
 }

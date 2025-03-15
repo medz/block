@@ -21,6 +21,24 @@ class _BlockMemoryTracker {
   _BlockMemoryTracker(this.memoryCost);
 }
 
+/// 内存压力等级
+enum MemoryPressureLevel {
+  /// 正常内存使用，无压力
+  none,
+
+  /// 轻度内存压力，建议释放非必要缓存
+  low,
+
+  /// 中度内存压力，应该主动释放缓存
+  medium,
+
+  /// 高度内存压力，必须释放所有可释放资源
+  high,
+
+  /// 危险级别，可能导致程序崩溃
+  critical,
+}
+
 /// A Block object represents an immutable, raw data file-like object.
 ///
 /// This is a pure Dart implementation inspired by the Web API Blob.
@@ -101,6 +119,188 @@ class Block {
     };
   }
 
+  /// 当前内存压力级别
+  static MemoryPressureLevel _currentPressureLevel = MemoryPressureLevel.none;
+
+  /// 内存使用限制 (字节)
+  static int? _memoryUsageLimit;
+
+  /// 内存压力回调列表
+  static final Map<MemoryPressureLevel, List<void Function()>>
+  _pressureCallbacks = {
+    MemoryPressureLevel.none: [],
+    MemoryPressureLevel.low: [],
+    MemoryPressureLevel.medium: [],
+    MemoryPressureLevel.high: [],
+    MemoryPressureLevel.critical: [],
+  };
+
+  /// 获取当前内存压力级别
+  static MemoryPressureLevel get currentMemoryPressureLevel =>
+      _currentPressureLevel;
+
+  /// 设置内存使用上限
+  ///
+  /// 当内存使用超过此限制时，会自动触发高内存压力事件。
+  /// 设置为null表示无限制。
+  ///
+  /// 示例:
+  /// ```dart
+  /// // 设置100MB的内存使用上限
+  /// Block.setMemoryUsageLimit(100 * 1024 * 1024);
+  ///
+  /// // 移除限制
+  /// Block.setMemoryUsageLimit(null);
+  /// ```
+  static void setMemoryUsageLimit(int? limitBytes) {
+    _memoryUsageLimit = limitBytes;
+    _checkMemoryPressure();
+  }
+
+  /// 获取当前设置的内存使用上限
+  static int? get memoryUsageLimit => _memoryUsageLimit;
+
+  /// 注册一个在指定内存压力级别下执行的回调
+  ///
+  /// 这允许应用程序在不同的内存压力级别上采取不同的措施。
+  ///
+  /// 参数:
+  /// - callback: 在达到指定内存压力级别时调用的函数
+  /// - level: 触发回调的内存压力级别
+  ///
+  /// 返回一个用于取消订阅的函数
+  ///
+  /// 示例:
+  /// ```dart
+  /// final cancel = Block.onMemoryPressureLevel(() {
+  ///   // 执行高压力下的内存清理
+  ///   print('High memory pressure detected!');
+  /// }, level: MemoryPressureLevel.high);
+  ///
+  /// // 稍后取消订阅
+  /// cancel();
+  /// ```
+  static Function onMemoryPressureLevel(
+    void Function() callback, {
+    required MemoryPressureLevel level,
+  }) {
+    _pressureCallbacks[level]!.add(callback);
+
+    return () {
+      _pressureCallbacks[level]!.remove(callback);
+    };
+  }
+
+  /// 手动触发指定级别的内存压力事件
+  ///
+  /// 这通常用于测试内存压力处理机制，或者在外部系统检测到内存压力时手动触发。
+  ///
+  /// 参数:
+  /// - level: 要触发的内存压力级别
+  ///
+  /// 示例:
+  /// ```dart
+  /// // 模拟高内存压力
+  /// Block.triggerMemoryPressure(MemoryPressureLevel.high);
+  /// ```
+  static void triggerMemoryPressure(MemoryPressureLevel level) {
+    _currentPressureLevel = level;
+    _notifyMemoryPressureCallbacks(level);
+  }
+
+  /// 释放可能的缓存内存，降低内存使用
+  ///
+  /// 此方法尝试释放不必要的内部缓存以减少内存使用。
+  /// 实际释放的内存量取决于当前的使用情况和可释放的缓存量。
+  ///
+  /// 返回释放的字节数（估计值）。
+  ///
+  /// 示例:
+  /// ```dart
+  /// int freedBytes = Block.reduceMemoryUsage();
+  /// print('释放了 $freedBytes 字节的内存');
+  /// ```
+  static int reduceMemoryUsage() {
+    // 当前实现中没有可释放的缓存，返回0
+    // 未来可能添加缓存机制后，此方法将实际释放内存
+    return 0;
+  }
+
+  /// 根据内存压力级别自动释放内存
+  static int _autoReduceMemoryUsage(MemoryPressureLevel level) {
+    int freedBytes = 0;
+
+    switch (level) {
+      case MemoryPressureLevel.low:
+        // 轻度压力：清理非关键缓存（未来实现）
+        break;
+      case MemoryPressureLevel.medium:
+        // 中度压力：清理所有缓存（未来实现）
+        break;
+      case MemoryPressureLevel.high:
+      case MemoryPressureLevel.critical:
+        // 高压力：强制清理所有可能的内存（未来实现）
+        freedBytes = reduceMemoryUsage();
+        break;
+      case MemoryPressureLevel.none:
+        // 无压力：不需要操作
+        break;
+    }
+
+    return freedBytes;
+  }
+
+  /// 检查内存压力状态并更新压力级别
+  static void _checkMemoryPressure() {
+    MemoryPressureLevel newLevel;
+
+    // 根据当前内存使用情况和限制确定压力级别
+    if (_memoryUsageLimit == null) {
+      newLevel = MemoryPressureLevel.none;
+    } else {
+      final double usageRatio = _totalMemoryUsage / _memoryUsageLimit!;
+
+      if (usageRatio >= 0.95) {
+        newLevel = MemoryPressureLevel.critical;
+      } else if (usageRatio >= 0.85) {
+        newLevel = MemoryPressureLevel.high;
+      } else if (usageRatio >= 0.7) {
+        newLevel = MemoryPressureLevel.medium;
+      } else if (usageRatio >= 0.5) {
+        newLevel = MemoryPressureLevel.low;
+      } else {
+        newLevel = MemoryPressureLevel.none;
+      }
+    }
+
+    // 如果压力级别发生变化，通知回调
+    if (newLevel != _currentPressureLevel) {
+      _currentPressureLevel = newLevel;
+      _notifyMemoryPressureCallbacks(newLevel);
+
+      // 自动响应内存压力
+      _autoReduceMemoryUsage(newLevel);
+    }
+  }
+
+  /// 通知特定级别及更高级别的内存压力回调
+  static void _notifyMemoryPressureCallbacks(MemoryPressureLevel level) {
+    // 调用特定级别的回调
+    for (final callback in _pressureCallbacks[level]!) {
+      callback();
+    }
+
+    // 对于高压力级别，也通知更低级别的回调
+    // 例如，高压力应该同时触发中压力和低压力的回调
+    if (level == MemoryPressureLevel.critical) {
+      _notifyMemoryPressureCallbacks(MemoryPressureLevel.high);
+    } else if (level == MemoryPressureLevel.high) {
+      _notifyMemoryPressureCallbacks(MemoryPressureLevel.medium);
+    } else if (level == MemoryPressureLevel.medium) {
+      _notifyMemoryPressureCallbacks(MemoryPressureLevel.low);
+    }
+  }
+
   /// 注册一个在需要减少内存使用时执行的回调
   ///
   /// 这是一个静态API，允许应用程序在内存压力大时得到通知并采取行动。
@@ -130,6 +330,9 @@ class Block {
       if (_totalMemoryUsage > thresholdBytes) {
         callback();
       }
+
+      // 每次检查后更新内存压力状态
+      _checkMemoryPressure();
     });
 
     return () => periodicTimer.cancel();
@@ -210,6 +413,9 @@ class Block {
 
     // 注册finalizer以在GC时减少内存统计
     _finalizer.attach(this, _BlockMemoryTracker(_memoryCost), detach: this);
+
+    // 每次创建新Block都检查内存压力状态
+    _checkMemoryPressure();
   }
 
   /// 计算所有部分的总内存成本（包括元数据开销）
