@@ -16,9 +16,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'block_memory_tracker.dart';
 import 'byte_data_view.dart';
 import 'deferred_operation.dart';
 import 'memory_manager.dart';
+import 'memory_pressure_level.dart';
 import 'shared_data.dart';
 
 /// 数据去重存储类，用于保存唯一的数据块
@@ -401,35 +403,6 @@ class DataStore {
       );
     }
   }
-}
-
-/// 用于跟踪Block内存使用的辅助类
-class BlockMemoryTracker {
-  /// 内存成本
-  final int memoryCost;
-
-  /// 需要释放的数据块引用
-  final List<Uint8List> dataToRelease;
-
-  BlockMemoryTracker(this.memoryCost, this.dataToRelease);
-}
-
-/// 内存压力等级
-enum MemoryPressureLevel {
-  /// 正常内存使用，无压力
-  none,
-
-  /// 轻度内存压力，建议释放非必要缓存
-  low,
-
-  /// 中度内存压力，应该主动释放缓存
-  medium,
-
-  /// 高度内存压力，必须释放所有可释放资源
-  high,
-
-  /// 危险级别，可能导致程序崩溃
-  critical,
 }
 
 /// 缓存项的优先级

@@ -19,3 +19,5 @@ export 'src/deferred_operation.dart';
 export 'src/memory_manager.dart';
 export 'src/disposable_block.dart';
 export 'src/shared_data.dart';
+export 'src/block_memory_tracker.dart';
+export 'src/memory_pressure_level.dart';
