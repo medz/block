@@ -18,6 +18,7 @@ import 'dart:typed_data';
 import 'dart:math' as math;
 
 import 'deferred_operation.dart';
+import 'memory_manager.dart';
 
 /// 表示对原始二进制数据的视图，无需复制数据
 ///
@@ -299,7 +300,9 @@ class _DataStore {
   /// 存储或获取共享数据
   ///
   /// 如果数据已存在，返回现有数据；否则存储并返回新数据
-  Uint8List store(Uint8List data) {
+  ///
+  /// Optional [sourceBlock] is used to track data usage by blocks
+  Uint8List store(Uint8List data, {Block? sourceBlock}) {
     // 空数据直接返回
     if (data.isEmpty) {
       return data;
@@ -321,6 +324,16 @@ class _DataStore {
         _totalSavedMemory += data.length;
         _duplicateBlockCount++;
 
+        // 集成内存管理器 - 如果提供了sourceBlock
+        if (sourceBlock != null) {
+          // 通知内存管理器关联数据与Block
+          MemoryManager.instance.associateDataWithBlock(
+            sourceBlock.hashCode.toString(),
+            hash,
+            data.length,
+          );
+        }
+
         return sharedData.data;
       }
 
@@ -329,31 +342,68 @@ class _DataStore {
 
       // 存储新数据
       _store[specificHash] = _SharedData(data, 1);
+
+      // 集成内存管理器 - 如果提供了sourceBlock
+      if (sourceBlock != null) {
+        // 通知内存管理器关联数据与Block
+        MemoryManager.instance.associateDataWithBlock(
+          sourceBlock.hashCode.toString(),
+          specificHash,
+          data.length,
+        );
+      }
+
       return data;
     }
 
     // 存储新数据
     _store[hash] = _SharedData(data, 1);
+
+    // 集成内存管理器 - 如果提供了sourceBlock
+    if (sourceBlock != null) {
+      // 通知内存管理器关联数据与Block
+      MemoryManager.instance.associateDataWithBlock(
+        sourceBlock.hashCode.toString(),
+        hash,
+        data.length,
+      );
+    }
+
     return data;
   }
 
   /// 数据引用计数减一，如果引用计数为0则从存储中移除
-  void release(Uint8List data) {
+  ///
+  /// Optional [sourceBlock] is used to track data usage by blocks
+  void release(Uint8List data, {Block? sourceBlock}) {
     // 空数据直接返回
     if (data.isEmpty) {
       return;
     }
 
+    // 计算数据大小（用于内存管理器）
+    final dataSize = data.length;
+
     // 计算哈希值
     final hash = _computeHash(data);
 
-    // 如果数据存在，减少引用计数
+    // 检查是否存在相同哈希的数据
     if (_store.containsKey(hash)) {
       final sharedData = _store[hash]!;
 
-      // 确保数据真的相同
+      // 哈希冲突检查：确保数据真的相同
       if (_isDataEqual(data, sharedData.data)) {
         sharedData.refCount--;
+
+        // 集成内存管理器 - 如果提供了sourceBlock
+        if (sourceBlock != null) {
+          // 通知内存管理器解除数据与Block的关联
+          MemoryManager.instance.dissociateDataFromBlock(
+            sourceBlock.hashCode.toString(),
+            hash,
+            dataSize,
+          );
+        }
 
         // 如果引用计数为0，从存储中移除
         if (sharedData.refCount <= 0) {
@@ -368,6 +418,16 @@ class _DataStore {
       if (_isDataEqual(data, entry.value.data)) {
         entry.value.refCount--;
 
+        // 集成内存管理器 - 如果提供了sourceBlock
+        if (sourceBlock != null) {
+          // 通知内存管理器解除数据与Block的关联
+          MemoryManager.instance.dissociateDataFromBlock(
+            sourceBlock.hashCode.toString(),
+            entry.key,
+            dataSize,
+          );
+        }
+
         // 如果引用计数为0，从存储中移除
         if (entry.value.refCount <= 0) {
           _store.remove(entry.key);
@@ -375,6 +435,18 @@ class _DataStore {
         return;
       }
     }
+  }
+
+  /// 获取指定哈希对应的数据块
+  Uint8List? getDataByHash(String hash) {
+    final sharedData = _store[hash];
+    return sharedData?.data;
+  }
+
+  /// 获取指定哈希对应的数据块引用计数
+  int getReferenceCount(String hash) {
+    final sharedData = _store[hash];
+    return sharedData?.refCount ?? 0;
   }
 
   /// 清除所有未被引用的数据块
@@ -389,6 +461,28 @@ class _DataStore {
       }
     }
 
+    for (final key in keysToRemove) {
+      _store.remove(key);
+    }
+
+    return freedBytes;
+  }
+
+  /// 清理孤立的数据块（没有Block引用的数据）
+  int cleanOrphanedData() {
+    int freedBytes = 0;
+    final keysToRemove = <String>[];
+
+    // 查询 MemoryManager 获取每个数据块的引用状态
+    for (final entry in _store.entries) {
+      final dataId = entry.key;
+      if (MemoryManager.instance.getDataReferenceCount(dataId) <= 0) {
+        keysToRemove.add(dataId);
+        freedBytes += entry.value.data.length;
+      }
+    }
+
+    // 移除未引用的数据
     for (final key in keysToRemove) {
       _store.remove(key);
     }
@@ -775,29 +869,29 @@ class _BlockCache {
 /// This is a pure Dart implementation inspired by the Web API Blob.
 /// It provides a way to handle binary data in Dart that works across all platforms.
 class Block {
-  /// The internal storage of data chunks
-  final List<Uint8List> _chunks;
-
-  /// The MIME type of the Block
-  final String _type;
-
-  /// For slices: reference to the parent Block
-  final Block? _parent;
-
-  /// For slices: starting offset in the parent Block
-  final int _startOffset;
-
-  /// For slices: length of this slice in bytes
-  int _sliceLength;
-
-  /// 当前Block实例的内存成本（以字节为单位）
-  final int _memoryCost;
-
-  /// 原始构造函数参数，用于延迟数据处理
+  /// The raw parts from which this Block was created
   final List<dynamic>? _rawParts;
 
-  /// 数据是否已处理的标志
-  bool _dataProcessed = false;
+  /// The list of data chunks that make up this Block
+  final List<Uint8List> _chunks;
+
+  /// The MIME type of this Block
+  final String _type;
+
+  /// The parent Block (if this is a slice)
+  final Block? _parent;
+
+  /// The start offset within the parent Block (if this is a slice)
+  final int _startOffset;
+
+  /// The length of this Block (or slice)
+  late final int _sliceLength;
+
+  /// The memory cost of this Block
+  final int _memoryCost;
+
+  /// Whether the data has been processed
+  bool _dataProcessed;
 
   /// The data size in bytes.
   ///
@@ -1135,6 +1229,39 @@ class Block {
     }
   });
 
+  /// 生成唯一的Block ID
+  static String _generateBlockId() {
+    return '${DateTime.now().microsecondsSinceEpoch}_${identityHashCode(DateTime.now()) & 0xFFFFFF}';
+  }
+
+  /// 注册Block到内存管理器
+  void _registerWithMemoryManager() {
+    MemoryManager.instance.registerBlock(this, hashCode.toString());
+  }
+
+  /// 当处理数据时，将数据与此Block关联
+  void _associateDataWithBlock(String dataId, int dataSize) {
+    MemoryManager.instance.associateDataWithBlock(
+      hashCode.toString(),
+      dataId,
+      dataSize,
+    );
+  }
+
+  /// 当不再需要数据时，解除数据与此Block的关联
+  void _dissociateDataFromBlock(String dataId, int dataSize) {
+    MemoryManager.instance.dissociateDataFromBlock(
+      hashCode.toString(),
+      dataId,
+      dataSize,
+    );
+  }
+
+  /// 记录Block被访问
+  void _recordBlockAccess() {
+    MemoryManager.instance.recordBlockAccess(hashCode.toString());
+  }
+
   /// Creates a new Block consisting of an optional array of parts and a MIME type.
   ///
   /// This constructor exactly mirrors the Web API Blob constructor.
@@ -1181,6 +1308,8 @@ class Block {
       }
     }
     _registerMemoryUsage();
+    // 注册到内存管理器
+    _registerWithMemoryManager();
   }
 
   /// Internal constructor for creating Block slices
@@ -1195,6 +1324,8 @@ class Block {
        _memoryCost = _calculateSliceMemoryCost(_sliceLength),
        _dataProcessed = true {
     _registerMemoryUsage();
+    // 注册到内存管理器
+    _registerWithMemoryManager();
   }
 
   /// Internal constructor for creating Block from explicit chunks
@@ -1206,6 +1337,8 @@ class Block {
       _memoryCost = _calculateChunksMemoryCost(_chunks),
       _dataProcessed = true {
     _registerMemoryUsage();
+    // 注册到内存管理器
+    _registerWithMemoryManager();
   }
 
   /// 当需要时处理数据
@@ -1480,26 +1613,21 @@ class Block {
 
   /// Returns the size of the Block in bytes.
   ///
-  /// The size is lazily calculated when first accessed and then cached.
+  /// This property corresponds to the Web API Blob.size property.
   int get size {
-    // 确保数据已处理
     _processDataIfNeeded();
 
-    // 如果已经计算过，直接返回缓存的结果
+    // 记录Block访问
+    MemoryManager.instance.recordBlockAccess(hashCode.toString());
+
     if (_size != null) {
       return _size!;
     }
 
-    // 首次访问时计算size
     if (_parent != null) {
-      // 对于切片，直接使用切片长度
       _size = _sliceLength;
-    } else if (_chunks.isEmpty) {
-      // 空Block的情况
-      _size = 0;
     } else {
-      // 计算所有数据块的总长度
-      _size = _chunks.fold<int>(0, (sum, chunk) => sum + chunk.length);
+      _size = _calculateChunksSize(_chunks);
     }
 
     return _size!;
@@ -1735,30 +1863,22 @@ class Block {
   /// }
   /// ```
   Uint8List? getDirectData() {
-    // 确保数据已处理
     _processDataIfNeeded();
 
-    // 如果是单个连续块，直接返回
-    if (_parent == null && _chunks.length == 1 && _chunks[0].length == size) {
+    // 记录Block访问
+    MemoryManager.instance.recordBlockAccess(hashCode.toString());
+
+    if (_parent != null) {
+      return _parent!.getDirectData()?.sublist(
+        _startOffset,
+        _startOffset + _sliceLength,
+      );
+    }
+
+    if (_chunks.length == 1) {
       return _chunks[0];
     }
 
-    // 如果是分片且父Block只有一个块，尝试使用sublist直接引用
-    if (_parent != null &&
-        _parent!._chunks.length == 1 &&
-        _parent!._parent == null) {
-      try {
-        return _parent!._chunks[0].sublist(
-          _startOffset,
-          _startOffset + _sliceLength,
-        );
-      } catch (_) {
-        // 如果有任何错误，返回null
-        return null;
-      }
-    }
-
-    // 其他情况无法直接访问
     return null;
   }
 
@@ -2099,5 +2219,68 @@ class Block {
         setMemoryUsageLimit(null); // 移除限制
       }
     };
+  }
+
+  /// 处理块数据，确保数据已加载
+  void _processData() {
+    if (_dataProcessed) return;
+
+    // 处理原始部分数据
+    if (_rawParts != null) {
+      for (final part in _rawParts!) {
+        if (part is String) {
+          final bytes = Uint8List.fromList(utf8.encode(part));
+          // 存储数据，可能返回已存在的数据块（去重）
+          // 传递this作为sourceBlock，用于跟踪数据使用
+          final storedData = _DataStore.instance.store(
+            bytes,
+            sourceBlock: this,
+          );
+          _chunks.add(storedData);
+        } else if (part is Uint8List) {
+          // 传递this作为sourceBlock，用于跟踪数据使用
+          final storedData = _DataStore.instance.store(part, sourceBlock: this);
+          _chunks.add(storedData);
+        } else if (part is ByteData) {
+          final bytes = Uint8List.view(
+            part.buffer,
+            part.offsetInBytes,
+            part.lengthInBytes,
+          );
+          // 传递this作为sourceBlock，用于跟踪数据使用
+          final storedData = _DataStore.instance.store(
+            bytes,
+            sourceBlock: this,
+          );
+          _chunks.add(storedData);
+        } else if (part is Block) {
+          // 对于嵌套Block，获取其所有数据块
+          part._processData(); // 确保数据已处理
+          _chunks.addAll(part._chunks);
+        }
+      }
+
+      // 计算总长度
+      _sliceLength = _calculateChunksSize(_chunks);
+      // 由于_rawParts是final无法设为null，我们用清空内容的方式释放资源
+      if (_rawParts is List) {
+        (_rawParts as List).clear();
+      }
+    }
+
+    _dataProcessed = true;
+  }
+
+  /// Calculate the total size of all chunks
+  static int _calculateChunksSize(List<Uint8List> chunks) {
+    if (chunks.isEmpty) {
+      return 0;
+    }
+
+    int totalSize = 0;
+    for (final chunk in chunks) {
+      totalSize += chunk.length;
+    }
+    return totalSize;
   }
 }
