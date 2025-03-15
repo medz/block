@@ -20,42 +20,19 @@ import 'byte_data_view.dart';
 import 'deferred_operation.dart';
 import 'memory_manager.dart';
 
-/// A Block represents immutable binary data, similar to the Web API Blob.
-///
-/// Block 实例是不可变的，但支持通过slice()创建新的引用不同部分的实例，
-/// 这不会复制数据，只会记录引用范围。
-///
-/// 特点:
-/// - 高效：避免不必要的数据复制
-/// - 灵活：支持各种数据源（字符串，Uint8List，Block等）
-/// - 内存优化：使用数据去重机制避免重复存储
-///
-/// 示例：
-/// ```dart
-/// // 创建一个包含字符串的Block
-/// final block = Block(["Hello world"]);
-///
-/// // 从Block获取数据
-/// final text = await block.text();
-/// final bytes = await block.arrayBuffer();
-///
-/// // 创建Block的一部分的新视图（不复制数据）
-/// final slice = block.slice(0, 5); // 只包含"Hello"
-/// ```
-
 /// 数据去重存储类，用于保存唯一的数据块
 ///
 /// 这是一个单例类，用于管理所有唯一的数据块。
 /// 当创建Block时，会先检查数据是否已存在，如果存在则复用。
-class _DataStore {
+class DataStore {
   /// 单例实例
-  static final _DataStore _instance = _DataStore._();
+  static final DataStore _instance = DataStore._();
 
   /// 获取单例实例
-  static _DataStore get instance => _instance;
+  static DataStore get instance => _instance;
 
   /// 私有构造函数
-  _DataStore._();
+  DataStore._();
 
   /// 存储数据块的哈希表
   ///
@@ -415,7 +392,7 @@ class _DataStore {
     }
 
     // 打印详细的统计信息，帮助调试
-    print('DEBUG: _DataStore statistics:');
+    print('DEBUG: DataStore statistics:');
     print('  Store size: ${_store.length}');
     for (final entry in _store.entries) {
       print(
@@ -935,7 +912,7 @@ class Block {
     );
 
     // 清理未引用的共享数据
-    freedBytes += _DataStore.instance.reduceMemoryUsage();
+    freedBytes += DataStore.instance.reduceMemoryUsage();
 
     return freedBytes;
   }
@@ -949,13 +926,13 @@ class Block {
         // 轻度压力：清理非关键缓存
         freedBytes = _BlockCache.instance.clearByPressureLevel(level);
         // 增加当轻度压力下的缓存和未使用数据的清理频率
-        freedBytes += _DataStore.instance.cleanUnreferencedData();
+        freedBytes += DataStore.instance.cleanUnreferencedData();
         break;
       case MemoryPressureLevel.medium:
         // 中度压力：清理所有缓存
         freedBytes = _BlockCache.instance.clearByPressureLevel(level);
         // 清理未引用的共享数据
-        freedBytes += _DataStore.instance.reduceMemoryUsage();
+        freedBytes += DataStore.instance.reduceMemoryUsage();
         break;
       case MemoryPressureLevel.high:
       case MemoryPressureLevel.critical:
@@ -973,7 +950,7 @@ class Block {
         // 无压力：只清理过期缓存和未引用的数据
         freedBytes = _BlockCache.instance.clearByPressureLevel(level);
         // 清理未引用的共享数据
-        freedBytes += _DataStore.instance.cleanUnreferencedData();
+        freedBytes += DataStore.instance.cleanUnreferencedData();
         break;
     }
 
@@ -1094,7 +1071,7 @@ class Block {
 
     // 释放数据块引用
     for (final data in tracker.dataToRelease) {
-      _DataStore.instance.release(data);
+      DataStore.instance.release(data);
     }
   });
 
@@ -1321,8 +1298,8 @@ class Block {
     final List<Uint8List> allBytes = [];
     for (final part in parts) {
       final Uint8List bytes = _convertPartToBytes(part);
-      // 使用 _DataStore.store 方法存储数据，以便跟踪数据去重
-      final storedBytes = _DataStore.instance.store(bytes);
+      // 使用 DataStore.store 方法存储数据，以便跟踪数据去重
+      final storedBytes = DataStore.instance.store(bytes);
       allBytes.add(storedBytes);
     }
 
@@ -1363,7 +1340,7 @@ class Block {
 
           final chunk = Uint8List(chunkSize);
           chunk.setRange(0, chunkSize, bytes, offset);
-          normalizedParts.add(_DataStore.instance.store(chunk));
+          normalizedParts.add(DataStore.instance.store(chunk));
           offset += chunkSize;
         }
       } else {
@@ -1403,7 +1380,7 @@ class Block {
 
       // If chunk is full, finalize it
       if (currentSize == defaultChunkSize) {
-        chunks.add(_DataStore.instance.store(currentChunk));
+        chunks.add(DataStore.instance.store(currentChunk));
         currentChunk = null;
         currentSize = 0;
       }
@@ -1414,7 +1391,7 @@ class Block {
       // Create right-sized final chunk
       final finalChunk = Uint8List(currentSize);
       finalChunk.setRange(0, currentSize, currentChunk, 0);
-      chunks.add(_DataStore.instance.store(finalChunk));
+      chunks.add(DataStore.instance.store(finalChunk));
     }
 
     return chunks;
@@ -1465,7 +1442,7 @@ class Block {
     }
 
     // 使用数据去重存储
-    return _DataStore.instance.store(rawData);
+    return DataStore.instance.store(rawData);
   }
 
   /// Combines all chunks into a single Uint8List
@@ -1976,7 +1953,7 @@ class Block {
   /// print('Saved ${report['totalSavedMemory']} bytes');
   /// ```
   static Map<String, dynamic> getDataDeduplicationReport() {
-    return _DataStore.instance.getReport();
+    return DataStore.instance.getReport();
   }
 
   /// 获取数据去重节省的总内存（字节）
@@ -1987,7 +1964,7 @@ class Block {
   /// print('Saved $savedMemory bytes');
   /// ```
   static int getDataDeduplicationSavedMemory() {
-    return _DataStore.instance.totalSavedMemory;
+    return DataStore.instance.totalSavedMemory;
   }
 
   /// 获取数据去重检测到的重复块数量
@@ -1998,12 +1975,12 @@ class Block {
   /// print('Found $duplicateCount duplicate blocks');
   /// ```
   static int getDataDeduplicationDuplicateCount() {
-    return _DataStore.instance.duplicateBlockCount;
+    return DataStore.instance.duplicateBlockCount;
   }
 
   /// 重置数据去重统计
   static void resetDataDeduplication() {
-    _DataStore.instance.resetStatistics();
+    DataStore.instance.resetStatistics();
   }
 
   /// 强制更新内存统计数据
@@ -2015,18 +1992,18 @@ class Block {
   static void forceUpdateMemoryStatistics() {
     // 这里不做实际的更新，因为内存统计是通过引用计数和finalizer自动更新的
     // 但我们可以触发一些内部操作，如清理未引用的数据
-    _DataStore.instance.cleanUnreferencedData();
+    DataStore.instance.cleanUnreferencedData();
 
     // 更新数据去重统计
-    _DataStore.instance.updateStatistics();
+    DataStore.instance.updateStatistics();
 
     // 打印当前内存统计，帮助调试
     print('DEBUG: Current memory statistics:');
     print('  Total memory usage: $_totalMemoryUsage bytes');
     print('  Active block count: $_activeBlockCount');
     print('  Data deduplication:');
-    print('    Duplicate count: ${_DataStore.instance.duplicateBlockCount}');
-    print('    Saved memory: ${_DataStore.instance.totalSavedMemory} bytes');
+    print('    Duplicate count: ${DataStore.instance.duplicateBlockCount}');
+    print('    Saved memory: ${DataStore.instance.totalSavedMemory} bytes');
   }
 
   /// 设置自动内存监控器，定期检查内存使用情况
@@ -2101,14 +2078,11 @@ class Block {
           final bytes = Uint8List.fromList(utf8.encode(part));
           // 存储数据，可能返回已存在的数据块（去重）
           // 传递this作为sourceBlock，用于跟踪数据使用
-          final storedData = _DataStore.instance.store(
-            bytes,
-            sourceBlock: this,
-          );
+          final storedData = DataStore.instance.store(bytes, sourceBlock: this);
           _chunks.add(storedData);
         } else if (part is Uint8List) {
           // 传递this作为sourceBlock，用于跟踪数据使用
-          final storedData = _DataStore.instance.store(part, sourceBlock: this);
+          final storedData = DataStore.instance.store(part, sourceBlock: this);
           _chunks.add(storedData);
         } else if (part is ByteData) {
           final bytes = Uint8List.view(
@@ -2117,10 +2091,7 @@ class Block {
             part.lengthInBytes,
           );
           // 传递this作为sourceBlock，用于跟踪数据使用
-          final storedData = _DataStore.instance.store(
-            bytes,
-            sourceBlock: this,
-          );
+          final storedData = DataStore.instance.store(bytes, sourceBlock: this);
           _chunks.add(storedData);
         } else if (part is Block) {
           // 对于嵌套Block，获取其所有数据块

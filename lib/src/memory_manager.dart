@@ -116,10 +116,10 @@ class MemoryManager {
         if (blocksUsingThisData != null) {
           blocksUsingThisData.remove(blockId);
 
-          // 如果没有Block使用此数据，在_DataStore中减少引用计数
+          // 如果没有Block使用此数据，在DataStore中减少引用计数
           if (blocksUsingThisData.isEmpty) {
             _dataReferenceMap.remove(dataId);
-            // TODO: 调用 _DataStore.release(dataId) 释放数据
+            // TODO: 调用 DataStore.release(dataId) 释放数据
           }
         }
       }
@@ -232,10 +232,10 @@ class MemoryManager {
     if (blocksUsingThisData != null) {
       blocksUsingThisData.remove(blockId);
 
-      // 如果没有Block使用此数据，在_DataStore中减少引用计数
+      // 如果没有Block使用此数据，在DataStore中减少引用计数
       if (blocksUsingThisData.isEmpty) {
         _dataReferenceMap.remove(dataId);
-        // TODO: 调用 _DataStore.release(dataId) 释放数据
+        // TODO: 调用 DataStore.release(dataId) 释放数据
       }
     }
   }
@@ -358,7 +358,7 @@ class MemoryManager {
     // 2. Clean up blocks that are no longer referenced
     freedBytes += _cleanupUnreferencedBlocks();
 
-    // 3. 清理孤立的数据块（在_DataStore中存在但没有Block引用的数据）
+    // 3. 清理孤立的数据块（在DataStore中存在但没有Block引用的数据）
     freedBytes += _cleanupOrphanedData();
 
     return freedBytes;
@@ -410,8 +410,8 @@ class MemoryManager {
   /// 清理孤立的数据块（没有Block引用的数据）
   int _cleanupOrphanedData() {
     // 由于直接导入 block.dart 会导致循环依赖，所以我们只能返回估计值
-    // 实际的清理应该由 _DataStore 调用 MemoryManager 的方法来实现
-    // 在 _DataStore.cleanOrphanedData 中查询 MemoryManager 获取引用状态并清理数据
+    // 实际的清理应该由 DataStore 调用 MemoryManager 的方法来实现
+    // 在 DataStore.cleanOrphanedData 中查询 MemoryManager 获取引用状态并清理数据
 
     // 基于当前已知的孤立数据数量估计清理的字节数
     // 假设每个孤立数据块平均 10KB

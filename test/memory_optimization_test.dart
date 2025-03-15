@@ -18,8 +18,9 @@ void main() {
         criticalWatermark: 20 * 1024 * 1024, // 20MB
       );
 
-      // 重置数据去重统计
-      _DataStore.instance.resetStatistics();
+      // Reset statistics
+      DataStore.instance.resetStatistics();
+      Block.resetDataDeduplication();
     });
 
     tearDown(() {
@@ -72,7 +73,6 @@ void main() {
 
       // 移除对Block的引用
       blocks.clear();
-      blocks = null;
 
       // 强制垃圾回收
       await _triggerGC();
@@ -121,7 +121,7 @@ void main() {
     });
 
     test(
-      '_DataStore integrates with MemoryManager for orphaned data cleanup',
+      'DataStore integrates with MemoryManager for orphaned data cleanup',
       () {
         // 创建一些Block对象
         final block1 = Block([Uint8List(1024 * 50)]); // 50KB
@@ -139,7 +139,7 @@ void main() {
         );
 
         // 执行孤立数据清理
-        final freedBytes = _DataStore.instance.cleanOrphanedData();
+        final freedBytes = DataStore.instance.cleanOrphanedData();
 
         // 由于Block仍在引用数据，应该没有数据被清理
         expect(freedBytes, 0, reason: '没有孤立数据，不应释放内存');
