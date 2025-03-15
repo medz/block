@@ -10,6 +10,9 @@ _Unreleased_
 
 ### Improvements
 
+- Added data deduplication feature to optimize memory usage when storing identical blocks
+- Added public API to view deduplication statistics and memory savings
+- Improved memory management under memory pressure conditions
 - Added comprehensive tests for stream caching functionality
 - Enhanced README examples for processing large files
 

@@ -14,6 +14,7 @@ A flexible and efficient binary data block handling library for Dart.
 - Built-in caching for performance optimization
 - Support for slicing without copying data
 - UTF-8 text decoding with error handling
+- Data deduplication for memory optimization
 
 ## Installation
 
@@ -146,6 +147,38 @@ Future<void> processLargeFile(String path) async {
 - Slicing operations don't copy data until the slice content is actually accessed
 - For blocks larger than 10MB, special handling is used to optimize memory usage
 - The `stream()` method provides efficient access to large blocks without loading the entire content into memory at once
+- Data deduplication automatically stores identical data blocks only once, reducing memory usage
+
+### Data Deduplication
+
+The Block library automatically detects and optimizes storage of identical data blocks:
+
+```dart
+// These blocks contain identical data but only store it once in memory
+final block1 = Block([Uint8List.fromList([1, 2, 3, 4, 5])]);
+final block2 = Block([Uint8List.fromList([1, 2, 3, 4, 5])]);
+
+// Check deduplication statistics
+final stats = Block.getDataDeduplicationReport();
+print('Memory saved: ${stats['totalSavedMemory']} bytes');
+print('Duplicate blocks: ${stats['duplicateBlockCount']}');
+
+// Get just the memory savings
+final savedMemory = Block.getDataDeduplicationSavedMemory();
+print('Memory saved: $savedMemory bytes');
+
+// Get just the duplicate count
+final duplicateCount = Block.getDataDeduplicationDuplicateCount();
+print('Duplicate blocks: $duplicateCount');
+```
+
+The deduplication system:
+
+- Automatically identifies identical data blocks using efficient hashing
+- Stores each unique data block only once in memory
+- Maintains reference counting to properly manage the lifecycle of shared data
+- Releases unused data blocks when they are no longer referenced
+- Works transparently without requiring any special API calls
 
 ## API Reference
 

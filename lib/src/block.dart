@@ -170,11 +170,279 @@ class ByteDataView {
   ByteBuffer get buffer => toUint8List().buffer;
 }
 
+/// 数据去重存储类，用于保存唯一的数据块
+///
+/// 这是一个单例类，用于管理所有唯一的数据块。
+/// 当创建Block时，会先检查数据是否已存在，如果存在则复用。
+class _DataStore {
+  /// 单例实例
+  static final _DataStore _instance = _DataStore._();
+
+  /// 获取单例实例
+  static _DataStore get instance => _instance;
+
+  /// 私有构造函数
+  _DataStore._();
+
+  /// 存储数据块的哈希表
+  ///
+  /// 键是数据块的哈希值，值是数据块及其引用计数
+  final Map<String, _SharedData> _store = {};
+
+  /// 总共节省的内存（字节）
+  int _totalSavedMemory = 0;
+
+  /// 重复数据的块计数
+  int _duplicateBlockCount = 0;
+
+  /// 获取总共节省的内存（字节）
+  int get totalSavedMemory => _totalSavedMemory;
+
+  /// 获取重复数据的块计数
+  int get duplicateBlockCount => _duplicateBlockCount;
+
+  /// 计算数据块的哈希值
+  ///
+  /// 使用简单的算法计算数据的哈希值，以便快速查找
+  String _computeHash(Uint8List data) {
+    // 对于小数据块，直接使用完整数据计算
+    if (data.length < 1024) {
+      return _hashData(data);
+    }
+
+    // 对于大数据块，只使用采样点计算哈希值以提高性能
+    // 采样开头、中间和结尾的数据
+    final samples = <int>[];
+
+    // 采样开头的512字节
+    final headSize = data.length > 512 ? 512 : data.length;
+    samples.addAll(data.sublist(0, headSize));
+
+    // 如果数据足够大，采样中间的512字节
+    if (data.length > 1024) {
+      final middleStart = (data.length ~/ 2) - 256;
+      final middleSize =
+          data.length - middleStart > 512 ? 512 : data.length - middleStart;
+      samples.addAll(data.sublist(middleStart, middleStart + middleSize));
+    }
+
+    // 如果数据足够大，采样末尾的512字节
+    if (data.length > 512) {
+      final tailStart = data.length - 512;
+      samples.addAll(data.sublist(tailStart));
+    }
+
+    // 添加数据长度作为哈希的一部分
+    final lengthBytes = Uint8List(8);
+    final view = ByteData.view(lengthBytes.buffer);
+    view.setUint64(0, data.length);
+    samples.addAll(lengthBytes);
+
+    return _hashData(Uint8List.fromList(samples));
+  }
+
+  /// 对数据进行哈希计算
+  String _hashData(Uint8List data) {
+    // 一个简单但有效的哈希算法
+    int hash = 0;
+    for (int i = 0; i < data.length; i++) {
+      hash = ((hash << 5) - hash) + data[i];
+      hash = hash & 0xFFFFFFFF; // 保证是32位整数
+    }
+
+    // 对于长度相同但内容极其相似的数据，加入一些随机性
+    final subSamples = <int>[];
+    if (data.length >= 16) {
+      // 采样一些特殊位置
+      for (int i = 0; i < 16; i++) {
+        final pos = (i * data.length ~/ 16);
+        subSamples.add(data[pos]);
+      }
+    }
+
+    int subHash = 0;
+    for (int i = 0; i < subSamples.length; i++) {
+      subHash = ((subHash << 7) - subHash) + subSamples[i];
+      subHash = subHash & 0xFFFFFFFF;
+    }
+
+    // 组合两个哈希值
+    return '$hash:$subHash:${data.length}';
+  }
+
+  /// 检查两个数据块是否完全相同
+  bool _isDataEqual(Uint8List data1, Uint8List data2) {
+    if (data1.length != data2.length) {
+      return false;
+    }
+
+    for (int i = 0; i < data1.length; i++) {
+      if (data1[i] != data2[i]) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /// 存储或获取共享数据
+  ///
+  /// 如果数据已存在，返回现有数据；否则存储并返回新数据
+  Uint8List store(Uint8List data) {
+    // 空数据直接返回
+    if (data.isEmpty) {
+      return data;
+    }
+
+    // 计算哈希值
+    final hash = _computeHash(data);
+
+    // 检查是否已存在相同哈希的数据
+    if (_store.containsKey(hash)) {
+      final sharedData = _store[hash]!;
+
+      // 哈希冲突检查：确保数据真的相同
+      if (_isDataEqual(data, sharedData.data)) {
+        // 增加引用计数
+        sharedData.refCount++;
+
+        // 记录节省的内存
+        _totalSavedMemory += data.length;
+        _duplicateBlockCount++;
+
+        return sharedData.data;
+      }
+
+      // 哈希冲突，但数据不同，使用更具体的哈希值
+      final specificHash = '$hash:${DateTime.now().microsecondsSinceEpoch}';
+
+      // 存储新数据
+      _store[specificHash] = _SharedData(data, 1);
+      return data;
+    }
+
+    // 存储新数据
+    _store[hash] = _SharedData(data, 1);
+    return data;
+  }
+
+  /// 数据引用计数减一，如果引用计数为0则从存储中移除
+  void release(Uint8List data) {
+    // 空数据直接返回
+    if (data.isEmpty) {
+      return;
+    }
+
+    // 计算哈希值
+    final hash = _computeHash(data);
+
+    // 如果数据存在，减少引用计数
+    if (_store.containsKey(hash)) {
+      final sharedData = _store[hash]!;
+
+      // 确保数据真的相同
+      if (_isDataEqual(data, sharedData.data)) {
+        sharedData.refCount--;
+
+        // 如果引用计数为0，从存储中移除
+        if (sharedData.refCount <= 0) {
+          _store.remove(hash);
+        }
+        return;
+      }
+    }
+
+    // 尝试查找数据（在哈希冲突的情况下）
+    for (final entry in _store.entries) {
+      if (_isDataEqual(data, entry.value.data)) {
+        entry.value.refCount--;
+
+        // 如果引用计数为0，从存储中移除
+        if (entry.value.refCount <= 0) {
+          _store.remove(entry.key);
+        }
+        return;
+      }
+    }
+  }
+
+  /// 清除所有未被引用的数据块
+  int cleanUnreferencedData() {
+    final keysToRemove = <String>[];
+    int freedBytes = 0;
+
+    for (final entry in _store.entries) {
+      if (entry.value.refCount <= 0) {
+        keysToRemove.add(entry.key);
+        freedBytes += entry.value.data.length;
+      }
+    }
+
+    for (final key in keysToRemove) {
+      _store.remove(key);
+    }
+
+    return freedBytes;
+  }
+
+  /// 在内存压力下释放数据
+  ///
+  /// 目前只清理未被引用的数据块，未来可以添加更智能的策略
+  int reduceMemoryUsage() {
+    // 清理缓存和未引用的共享数据
+    int freedBytes = 0;
+
+    // 清理缓存
+    freedBytes += _BlockCache.instance.clearByPressureLevel(
+      MemoryPressureLevel.medium,
+    );
+
+    // 清理未引用的共享数据
+    freedBytes += cleanUnreferencedData();
+
+    return freedBytes;
+  }
+
+  /// 获取数据存储状态报告
+  Map<String, dynamic> getReport() {
+    int totalBytes = 0;
+    int totalRefCount = 0;
+
+    for (final entry in _store.values) {
+      totalBytes += entry.data.length;
+      totalRefCount += entry.refCount;
+    }
+
+    return {
+      'uniqueBlockCount': _store.length,
+      'totalBytes': totalBytes,
+      'totalRefCount': totalRefCount,
+      'totalSavedMemory': _totalSavedMemory,
+      'duplicateBlockCount': _duplicateBlockCount,
+    };
+  }
+}
+
+/// 共享数据结构，包含数据和引用计数
+class _SharedData {
+  /// 数据内容
+  final Uint8List data;
+
+  /// 引用计数
+  int refCount;
+
+  _SharedData(this.data, this.refCount);
+}
+
 /// 用于跟踪Block内存使用的辅助类
 class _BlockMemoryTracker {
+  /// 内存成本
   final int memoryCost;
 
-  _BlockMemoryTracker(this.memoryCost);
+  /// 需要释放的数据块引用
+  final List<Uint8List> dataToRelease;
+
+  _BlockMemoryTracker(this.memoryCost, this.dataToRelease);
 }
 
 /// 内存压力等级
@@ -294,7 +562,10 @@ class _BlockCache {
     return item.data as T;
   }
 
-  /// 将数据存入缓存
+  /// 将数据存入缓存，可选设置优先级
+  ///
+  /// 优先级可以是 'low', 'medium', 或 'high'，默认为 'medium'
+  /// 在内存压力下，低优先级缓存会先被清理
   void put<T>({
     required String key,
     required T data,
@@ -645,9 +916,18 @@ class Block {
   /// print('释放了 $freedBytes 字节的内存');
   /// ```
   static int reduceMemoryUsage() {
-    // 当前实现中没有可释放的缓存，返回0
-    // 未来可能添加缓存机制后，此方法将实际释放内存
-    return 0;
+    // 清理缓存和未引用的共享数据
+    int freedBytes = 0;
+
+    // 清理缓存
+    freedBytes += _BlockCache.instance.clearByPressureLevel(
+      MemoryPressureLevel.medium,
+    );
+
+    // 清理未引用的共享数据
+    freedBytes += _DataStore.instance.reduceMemoryUsage();
+
+    return freedBytes;
   }
 
   /// 根据内存压力级别自动释放内存
@@ -658,10 +938,14 @@ class Block {
       case MemoryPressureLevel.low:
         // 轻度压力：清理非关键缓存
         freedBytes = _BlockCache.instance.clearByPressureLevel(level);
+        // 清理未引用的共享数据
+        freedBytes += _DataStore.instance.reduceMemoryUsage();
         break;
       case MemoryPressureLevel.medium:
         // 中度压力：清理所有缓存
         freedBytes = _BlockCache.instance.clearByPressureLevel(level);
+        // 清理未引用的共享数据
+        freedBytes += _DataStore.instance.reduceMemoryUsage();
         break;
       case MemoryPressureLevel.high:
       case MemoryPressureLevel.critical:
@@ -670,8 +954,10 @@ class Block {
         freedBytes += reduceMemoryUsage();
         break;
       case MemoryPressureLevel.none:
-        // 无压力：只清理过期缓存
+        // 无压力：只清理过期缓存和未引用的数据
         freedBytes = _BlockCache.instance.clearByPressureLevel(level);
+        // 清理未引用的共享数据
+        freedBytes += _DataStore.instance.cleanUnreferencedData();
         break;
     }
 
@@ -774,6 +1060,11 @@ class Block {
     // 当Block被垃圾回收时，减少总内存使用量统计
     _totalMemoryUsage -= tracker.memoryCost;
     _activeBlockCount--;
+
+    // 释放数据块引用
+    for (final data in tracker.dataToRelease) {
+      _DataStore.instance.release(data);
+    }
   });
 
   /// Creates a new Block consisting of an optional array of parts and a MIME type.
@@ -839,8 +1130,20 @@ class Block {
     _totalMemoryUsage += _memoryCost;
     _activeBlockCount++;
 
-    // 注册finalizer以在GC时减少内存统计
-    _finalizer.attach(this, _BlockMemoryTracker(_memoryCost), detach: this);
+    // 收集需要跟踪的数据块
+    final dataToRelease = <Uint8List>[];
+
+    // 只跟踪直接持有的数据块，slice不需要跟踪
+    if (_parent == null && _chunks.isNotEmpty) {
+      dataToRelease.addAll(_chunks);
+    }
+
+    // 注册finalizer以在GC时减少内存统计和释放数据
+    _finalizer.attach(
+      this,
+      _BlockMemoryTracker(_memoryCost, dataToRelease),
+      detach: this,
+    );
 
     // 每次创建新Block都检查内存压力状态
     _checkMemoryPressure();
@@ -1015,12 +1318,14 @@ class Block {
 
   /// Helper function to convert various types to Uint8List
   static Uint8List _convertPartToBytes(dynamic part) {
+    Uint8List rawData;
+
     if (part is String) {
-      return Uint8List.fromList(utf8.encode(part));
+      rawData = Uint8List.fromList(utf8.encode(part));
     } else if (part is Uint8List) {
-      return part;
+      rawData = part;
     } else if (part is ByteData) {
-      return Uint8List.view(
+      rawData = Uint8List.view(
         part.buffer,
         part.offsetInBytes,
         part.lengthInBytes,
@@ -1030,9 +1335,9 @@ class Block {
       // For a direct Block, we need to combine chunks
       if (part._parent == null && part._chunks.isNotEmpty) {
         if (part._chunks.length == 1) {
-          return part._chunks[0];
+          rawData = part._chunks[0];
         } else {
-          return part._combineChunks();
+          rawData = part._combineChunks();
         }
       }
       // For a slice, we need to get the slice data
@@ -1040,10 +1345,10 @@ class Block {
         final parentData = part._parent!._combineChunks();
         final sliceData = Uint8List(part._sliceLength);
         sliceData.setRange(0, part._sliceLength, parentData, part._startOffset);
-        return sliceData;
+        rawData = sliceData;
       } else {
         // Empty Block
-        return Uint8List(0);
+        rawData = Uint8List(0);
       }
     } else {
       throw ArgumentError(
@@ -1051,6 +1356,9 @@ class Block {
         'Supported types are String, Uint8List, ByteData, and Block.',
       );
     }
+
+    // 使用数据去重存储
+    return _DataStore.instance.store(rawData);
   }
 
   /// Combines all chunks into a single Uint8List
@@ -1427,5 +1735,45 @@ class Block {
   /// 从缓存中移除指定的Block
   static void removeFromCache(String key) {
     _BlockCache.instance.remove(key);
+  }
+
+  /// 获取数据去重的统计信息
+  ///
+  /// 返回一个包含以下信息的Map：
+  /// - uniqueBlockCount: 唯一数据块的数量
+  /// - totalBytes: 存储的总字节数
+  /// - totalRefCount: 总引用计数
+  /// - totalSavedMemory: 总共节省的内存（字节）
+  /// - duplicateBlockCount: 重复数据的块计数
+  ///
+  /// 示例:
+  /// ```dart
+  /// final report = Block.getDataDeduplicationReport();
+  /// print('Saved ${report['totalSavedMemory']} bytes');
+  /// ```
+  static Map<String, dynamic> getDataDeduplicationReport() {
+    return _DataStore.instance.getReport();
+  }
+
+  /// 获取数据去重节省的总内存（字节）
+  ///
+  /// 示例:
+  /// ```dart
+  /// final savedMemory = Block.getDataDeduplicationSavedMemory();
+  /// print('Saved $savedMemory bytes');
+  /// ```
+  static int getDataDeduplicationSavedMemory() {
+    return _DataStore.instance.totalSavedMemory;
+  }
+
+  /// 获取数据去重检测到的重复块数量
+  ///
+  /// 示例:
+  /// ```dart
+  /// final duplicateCount = Block.getDataDeduplicationDuplicateCount();
+  /// print('Found $duplicateCount duplicate blocks');
+  /// ```
+  static int getDataDeduplicationDuplicateCount() {
+    return _DataStore.instance.duplicateBlockCount;
   }
 }
