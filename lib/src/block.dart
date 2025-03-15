@@ -1362,6 +1362,9 @@ class Block {
         part.lengthInBytes,
       );
     } else if (part is Block) {
+      // 确保嵌套Block的数据已被处理
+      part._processDataIfNeeded();
+
       // If it's already a Block, get its data
       // For a direct Block, we need to combine chunks
       if (part._parent == null && part._chunks.isNotEmpty) {
