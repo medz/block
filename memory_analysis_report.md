@@ -77,6 +77,132 @@
    - 添加更详细的内存使用统计，包括每个块的最后访问时间
    - 提供内存使用警告和建议，帮助开发者识别潜在的内存问题
 
+## Dart 中的 Expando 和 WeakReference 分析
+
+基于最新的研究和测试结果，我们深入分析了 Dart 中的 Expando 和 WeakReference 特性，以及它们在改进 Block 库内存管理方面的潜力。
+
+### WeakReference 特性分析
+
+WeakReference 是 Dart 在 2.12 版本引入的一个类，用于创建对对象的弱引用。与强引用不同，弱引用不会阻止对象被垃圾回收：
+
+1. **基本原理**：
+
+   - 允许持有对对象的引用，但不会阻止该对象被垃圾回收
+   - 当对象仅被弱引用指向时，可以被自由回收
+   - 通过 `target` 属性访问引用的对象，如果对象已被回收则返回 null
+
+2. **主要优势**：
+
+   - 可以减少内存泄漏风险
+   - 使垃圾回收行为可观察（可以检测到对象何时被回收）
+   - 提供了引用追踪而不阻止垃圾回收的机制
+
+3. **适用场景**：
+   - 缓存系统：存储可以重新计算或获取的数据
+   - 观察者模式：维护对观察者的引用而不阻止其被回收
+   - 长生命周期对象引用短生命周期对象的场景
+
+### Expando 特性分析
+
+Expando 是 Dart 较早提供的一个类，允许给对象动态添加属性，而不会阻止键对象被垃圾回收：
+
+1. **基本原理**：
+
+   - 功能类似于 WeakMap（弱键映射），而不是直接的弱引用
+   - 允许将额外数据关联到任何对象上，不修改对象本身
+   - 当关联的对象（键）被垃圾回收时，Expando 内部会自动删除相关条目
+
+2. **与 WeakReference 的区别**：
+
+   - Expando 在对象被回收后，无法观察到回收行为
+   - 一旦键对象被回收，就无法访问关联的值
+   - 更适合关联额外数据，而不是简单引用跟踪
+
+3. **存在的限制**：
+   - Web 平台（dart2js）上的实现可能存在内存泄漏风险
+   - 无法主动触发清理过程
+   - 不提供回调机制通知对象被回收
+
+### 在 Block 库中的应用建议
+
+基于测试和分析，我们建议在 Block 库中结合使用 WeakReference 和 Finalizer 来改进内存管理：
+
+1. **改进引用跟踪**：
+
+   ```dart
+   // 使用 WeakReference 追踪 Block 对象
+   final Map<String, WeakReference<Block>> _blockReferences = {};
+
+   void registerBlock(Block block, String id) {
+     _blockReferences[id] = WeakReference<Block>(block);
+     _blockAccessTimes[id] = DateTime.now();
+   }
+
+   bool isBlockAlive(String id) {
+     final ref = _blockReferences[id];
+     return ref != null && ref.target != null;
+   }
+   ```
+
+2. **结合 Finalizer 使用**：
+
+   ```dart
+   // 在对象被回收时执行清理操作
+   static final _finalizer = Finalizer<String>((blockId) {
+     // 执行清理操作，例如从_DataStore移除数据
+     _cleanupDataStore(blockId);
+   });
+
+   void registerBlock(Block block, String id) {
+     _blockReferences[id] = WeakReference<Block>(block);
+     // 关联 finalizer
+     _finalizer.attach(block, id, detach: block);
+   }
+   ```
+
+3. **改进 \_DataStore 实现**：
+
+   ```dart
+   // 在 _DataStore 中使用 WeakReference 跟踪哪些 Block 对象正在使用数据块
+   class _DataStore {
+     // 跟踪使用某个数据块的所有 Block 对象
+     final Map<String, Set<WeakReference<Block>>> _usageTracking = {};
+
+     // 定期清理不再被引用的数据块
+     void cleanupUnusedData() {
+       final keysToRemove = <String>[];
+
+       for (final entry in _usageTracking.entries) {
+         // 移除无效引用
+         entry.value.removeWhere((ref) => ref.target == null);
+
+         // 如果没有有效引用，标记数据块可移除
+         if (entry.value.isEmpty) {
+           keysToRemove.add(entry.key);
+         }
+       }
+
+       // 移除未使用的数据块
+       for (final key in keysToRemove) {
+         _removeData(key);
+       }
+     }
+   }
+   ```
+
+4. **实现真正的 LRU 策略**：
+
+   - 结合 WeakReference 跟踪和访问时间记录
+   - 当内存压力增加时，优先清理长时间未访问的数据块
+   - 保留最近使用的数据块，提高性能
+
+5. **重新设计去重机制**：
+   - 使用更可靠的哈希计算方法
+   - 结合 WeakReference 跟踪识别真正的重复数据
+   - 改进引用计数减少机制，确保在对象被回收时正确减少
+
 ## 结论
 
-Block 库的数据去重机制工作良好，能够有效减少重复数据的内存占用。然而，内存清理机制存在不足，可能导致长时间运行的应用程序出现内存泄漏。通过实现上述建议，特别是完善引用计数和增强内存清理策略，可以显著提高库的内存管理效率，使其更适合在内存受限的环境中使用。
+Block 库的数据去重机制工作良好，能够有效减少重复数据的内存占用。然而，内存清理机制存在不足，可能导致长时间运行的应用程序出现内存泄漏。通过实现上述建议，特别是结合使用 WeakReference 和 Finalizer 改进引用跟踪和清理机制，可以显著提高库的内存管理效率，使其更适合在内存受限的环境中使用。
+
+此外，使用 Dart 的现代内存管理特性（如 WeakReference 和 Finalizer）可以更精确地追踪对象生命周期，并在对象被垃圾回收时执行必要的清理操作，从而解决当前内存管理中观察到的问题。

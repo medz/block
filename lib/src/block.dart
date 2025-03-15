@@ -999,7 +999,7 @@ class Block {
         // 高压力：清理所有缓存并强制释放所有可能的内存
         freedBytes = _BlockCache.instance.clearByPressureLevel(level);
         freedBytes += reduceMemoryUsage();
-        
+
         // 在高压力或危急情况下，主动触发垃圾回收
         if (level == MemoryPressureLevel.critical) {
           // 使用间接方式提示垃圾回收器工作
@@ -1034,13 +1034,17 @@ class Block {
       final double usageRatio = _totalMemoryUsage / _memoryUsageLimit!;
 
       // 降低阈值，让系统更早响应内存压力
-      if (usageRatio >= 0.90) { // 从0.95降低到0.90
+      if (usageRatio >= 0.90) {
+        // 从0.95降低到0.90
         newLevel = MemoryPressureLevel.critical;
-      } else if (usageRatio >= 0.80) { // 从0.85降低到0.80
+      } else if (usageRatio >= 0.80) {
+        // 从0.85降低到0.80
         newLevel = MemoryPressureLevel.high;
-      } else if (usageRatio >= 0.65) { // 从0.7降低到0.65
+      } else if (usageRatio >= 0.65) {
+        // 从0.7降低到0.65
         newLevel = MemoryPressureLevel.medium;
-      } else if (usageRatio >= 0.45) { // 从0.5降低到0.45
+      } else if (usageRatio >= 0.45) {
+        // 从0.5降低到0.45
         newLevel = MemoryPressureLevel.low;
       } else {
         newLevel = MemoryPressureLevel.none;
@@ -2037,12 +2041,12 @@ class Block {
   }
 
   /// 设置自动内存监控器，定期检查内存使用情况
-  /// 
+  ///
   /// [intervalMs] - 检查间隔（毫秒）
   /// [memoryLimit] - 内存使用上限（字节）
-  /// 
+  ///
   /// 返回一个用于停止监控的函数
-  /// 
+  ///
   /// 示例:
   /// ```dart
   /// // 开始每5秒监控一次，内存上限设为100MB
@@ -2050,7 +2054,7 @@ class Block {
   ///   intervalMs: 5000,
   ///   memoryLimit: 100 * 1024 * 1024,
   /// );
-  /// 
+  ///
   /// // 稍后停止监控
   /// stopMonitor();
   /// ```
@@ -2069,10 +2073,10 @@ class Block {
 
       // 强制更新内存统计
       forceUpdateMemoryStatistics();
-      
+
       // 检查内存压力
       _checkMemoryPressure();
-      
+
       // 如果内存使用率超过80%，主动减少内存占用
       if (_memoryUsageLimit != null) {
         final double usageRatio = _totalMemoryUsage / _memoryUsageLimit!;

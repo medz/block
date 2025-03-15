@@ -5,6 +5,7 @@
 
 import 'dart:async';
 import 'dart:collection';
+import 'dart:core';
 
 /// A memory manager for Block library that provides enhanced memory management capabilities.
 ///
@@ -45,7 +46,7 @@ class MemoryManager {
   final _blockAccessTimes = HashMap<String, DateTime>();
 
   /// Weak references to blocks
-  final _weakBlockRefs = HashSet<WeakReference>();
+  final _weakBlockRefs = HashSet<WeakReference<Object>>();
 
   /// Start the memory manager with specified parameters
   void start({
@@ -87,7 +88,7 @@ class MemoryManager {
   /// Register a block with the memory manager
   void registerBlock(Object block, String blockId) {
     // Add weak reference to the block
-    _weakBlockRefs.add(WeakReference(block));
+    _weakBlockRefs.add(WeakReference<Object>(block));
 
     // Record access time
     _recordBlockAccess(blockId);
@@ -196,7 +197,7 @@ class MemoryManager {
   /// Clean up blocks that are no longer referenced
   int _cleanupUnreferencedBlocks() {
     // Remove weak references that no longer point to objects
-    _weakBlockRefs.removeWhere((ref) => !ref.isValid);
+    _weakBlockRefs.removeWhere((ref) => ref.target == null);
 
     // In a real implementation, we would actually free the memory
     // associated with these blocks. This is just a placeholder.
@@ -222,13 +223,15 @@ class MemoryManager {
 }
 
 /// A simple weak reference implementation
-class WeakReference {
+class WeakReference<T> {
   final Expando _expando = Expando();
   final Object _key = Object();
 
-  WeakReference(Object target) {
+  WeakReference(T target) {
     _expando[_key] = target;
   }
 
   bool get isValid => _expando[_key] != null;
+
+  T? get target => isValid ? _expando[_key] as T? : null;
 }
