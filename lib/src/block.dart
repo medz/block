@@ -37,7 +37,7 @@ class DataStore {
   /// 存储数据块的哈希表
   ///
   /// 键是数据块的哈希值，值是数据块及其引用计数
-  final Map<String, _SharedData> _store = {};
+  final Map<String, SharedData> _store = {};
 
   /// 总共节省的内存（字节）
   int _totalSavedMemory = 0;
@@ -187,7 +187,7 @@ class DataStore {
       final specificHash = '$hash:${DateTime.now().microsecondsSinceEpoch}';
 
       // 存储新数据
-      _store[specificHash] = _SharedData(data, 1);
+      _store[specificHash] = SharedData(data, 1);
 
       // 集成内存管理器 - 如果提供了sourceBlock
       if (sourceBlock != null) {
@@ -203,7 +203,7 @@ class DataStore {
     }
 
     // 存储新数据
-    _store[hash] = _SharedData(data, 1);
+    _store[hash] = SharedData(data, 1);
 
     // 集成内存管理器 - 如果提供了sourceBlock
     if (sourceBlock != null) {
@@ -403,25 +403,25 @@ class DataStore {
 }
 
 /// 共享数据结构，包含数据和引用计数
-class _SharedData {
+class SharedData {
   /// 数据内容
   final Uint8List data;
 
   /// 引用计数
   int refCount;
 
-  _SharedData(this.data, this.refCount);
+  SharedData(this.data, this.refCount);
 }
 
 /// 用于跟踪Block内存使用的辅助类
-class _BlockMemoryTracker {
+class BlockMemoryTracker {
   /// 内存成本
   final int memoryCost;
 
   /// 需要释放的数据块引用
   final List<Uint8List> dataToRelease;
 
-  _BlockMemoryTracker(this.memoryCost, this.dataToRelease);
+  BlockMemoryTracker(this.memoryCost, this.dataToRelease);
 }
 
 /// 内存压力等级
@@ -1064,7 +1064,7 @@ class Block {
   static const int defaultChunkSize = 512 * 1024;
 
   /// 用于finalizer的回调函数
-  static final _finalizer = Finalizer<_BlockMemoryTracker>((tracker) {
+  static final _finalizer = Finalizer<BlockMemoryTracker>((tracker) {
     // 当Block被垃圾回收时，减少总内存使用量统计
     _totalMemoryUsage -= tracker.memoryCost;
     _activeBlockCount--;
@@ -1220,7 +1220,7 @@ class Block {
     // 注册finalizer以在GC时减少内存统计和释放数据
     _finalizer.attach(
       this,
-      _BlockMemoryTracker(_memoryCost, dataToRelease),
+      BlockMemoryTracker(_memoryCost, dataToRelease),
       detach: this,
     );
 
