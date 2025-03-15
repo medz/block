@@ -38,9 +38,7 @@ class DisposableBlock {
 
   /// Generate a unique ID for this block
   static String _generateId() {
-    return DateTime.now().microsecondsSinceEpoch.toString() +
-        '_' +
-        (identityHashCode(DateTime.now()) & 0xFFFFFF).toRadixString(16);
+    return '${DateTime.now().microsecondsSinceEpoch}_${(identityHashCode(DateTime.now()) & 0xFFFFFF).toRadixString(16)}';
   }
 
   /// Get the size of the block in bytes

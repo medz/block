@@ -20,13 +20,10 @@ class _BlockTrackingInfo {
   DateTime lastAccessTime;
 
   /// 内存使用成本估计（字节）
-  int memoryCost;
+  int memoryCost = 0;
 
-  _BlockTrackingInfo({
-    required this.blockId,
-    required this.lastAccessTime,
-    this.memoryCost = 0,
-  }) : dataIds = <String>{};
+  _BlockTrackingInfo({required this.blockId, required this.lastAccessTime})
+    : dataIds = <String>{};
 
   /// 添加数据块关联
   void addDataReference(String dataId) {

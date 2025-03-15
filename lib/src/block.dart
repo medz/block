@@ -68,7 +68,7 @@ class ByteDataView {
     }
 
     if (_parent != null) {
-      return _parent!.getUint8(_offset + byteOffset);
+      return _parent.getUint8(_offset + byteOffset);
     }
 
     // 定位到正确的块
@@ -94,7 +94,7 @@ class ByteDataView {
     }
 
     if (_parent != null) {
-      _parent!._copyRange(target, targetOffset, _offset, _offset + length);
+      _parent._copyRange(target, targetOffset, _offset, _offset + length);
       return;
     }
 
@@ -104,7 +104,7 @@ class ByteDataView {
   /// 内部方法：将指定范围的数据复制到目标缓冲区
   void _copyRange(Uint8List target, int targetOffset, int start, int end) {
     if (_parent != null) {
-      _parent!._copyRange(target, targetOffset, _offset + start, _offset + end);
+      _parent._copyRange(target, targetOffset, _offset + start, _offset + end);
       return;
     }
 
@@ -161,10 +161,10 @@ class ByteDataView {
     }
 
     if (_parent != null &&
-        _parent!.isContinuous &&
+        _parent.isContinuous &&
         _offset == 0 &&
-        length == _parent!.length) {
-      return _parent!.continuousData;
+        length == _parent.length) {
+      return _parent.continuousData;
     }
 
     return null;
@@ -1349,9 +1349,9 @@ class Block {
     }
 
     // 处理原始数据
-    final procesedChunks = _createBlockChunks(_rawParts!);
+    final procesedChunks = _createBlockChunks(_rawParts);
     _chunks.addAll(procesedChunks);
-    _sliceLength = _calculateTotalSize(_rawParts!);
+    _sliceLength = _calculateTotalSize(_rawParts);
 
     // 标记为已处理
     _dataProcessed = true;
@@ -1580,7 +1580,7 @@ class Block {
       }
       // For a slice, we need to get the slice data
       else if (part._parent != null) {
-        final parentData = part._parent!._combineChunks();
+        final parentData = part._parent._combineChunks();
         final sliceData = Uint8List(part._sliceLength);
         sliceData.setRange(0, part._sliceLength, parentData, part._startOffset);
         rawData = sliceData;
@@ -1673,12 +1673,12 @@ class Block {
     // 如果这已经是一个slice，寻找根Block以避免多层slice嵌套
     if (_parent != null) {
       // 找到根Block
-      Block rootParent = _parent!;
+      Block rootParent = _parent;
       int totalOffset = _startOffset + start;
 
       while (rootParent._parent != null) {
         totalOffset += rootParent._startOffset;
-        rootParent = rootParent._parent!;
+        rootParent = rootParent._parent;
       }
 
       // 从根Block创建slice，避免多层嵌套
@@ -1837,7 +1837,7 @@ class Block {
 
     if (_parent != null) {
       // 从父Block创建视图
-      var parentView = _parent!.getByteDataView();
+      var parentView = _parent.getByteDataView();
       return parentView.subView(_startOffset, _startOffset + _sliceLength);
     }
 
@@ -1869,7 +1869,7 @@ class Block {
     MemoryManager.instance.recordBlockAccess(hashCode.toString());
 
     if (_parent != null) {
-      return _parent!.getDirectData()?.sublist(
+      return _parent.getDirectData()?.sublist(
         _startOffset,
         _startOffset + _sliceLength,
       );
@@ -1940,9 +1940,9 @@ class Block {
     // 对于分片数据，优化流式读取
     if (_parent != null) {
       // 当父Block是嵌套slice时，处理优化
-      if (_parent!._parent != null) {
+      if (_parent._parent != null) {
         // 创建一个新的合并计算的slice直接从顶层读取
-        final combinedSlice = _parent!.slice(
+        final combinedSlice = _parent.slice(
           _startOffset,
           _startOffset + _sliceLength,
         );
@@ -1953,7 +1953,7 @@ class Block {
       }
 
       // 获取父Block的ByteDataView
-      final parentView = _parent!.getByteDataView();
+      final parentView = _parent.getByteDataView();
       final subView = parentView.subView(
         _startOffset,
         _startOffset + _sliceLength,
@@ -2227,7 +2227,7 @@ class Block {
 
     // 处理原始部分数据
     if (_rawParts != null) {
-      for (final part in _rawParts!) {
+      for (final part in _rawParts) {
         if (part is String) {
           final bytes = Uint8List.fromList(utf8.encode(part));
           // 存储数据，可能返回已存在的数据块（去重）
@@ -2263,10 +2263,8 @@ class Block {
       // 计算总长度
       _sliceLength = _calculateChunksSize(_chunks);
       // 由于_rawParts是final无法设为null，我们用清空内容的方式释放资源
-      if (_rawParts is List) {
-        (_rawParts as List).clear();
-      }
-    }
+      (_rawParts as List).clear();
+        }
 
     _dataProcessed = true;
   }

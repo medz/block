@@ -11,7 +11,7 @@
 /// - 流式数据处理
 /// - 异步API支持
 /// - 零拷贝数据访问
-library block;
+library;
 
 export 'src/block.dart';
 export 'src/deferred_operation.dart';

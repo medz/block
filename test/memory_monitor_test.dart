@@ -6,8 +6,6 @@
 import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:block/block.dart';
-import 'dart:async';
-import 'dart:math';
 
 void main() {
   group('内存监控测试', () {

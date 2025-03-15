@@ -44,7 +44,7 @@ void main() {
       );
 
       // 创建Block的分片，再次验证跟踪
-      final slice = block.slice(0, 1024);
+      block.slice(0, 1024);
       expect(
         MemoryManager.instance.getMemoryReport()['trackedBlockCount'],
         2,
@@ -157,7 +157,6 @@ Future<void> _triggerGC() async {
     lists.add(List<int>.filled(1000, i));
   }
   lists.clear();
-  lists = null;
 
   // 等待一段时间，希望垃圾回收发生
   await Future.delayed(const Duration(seconds: 2));

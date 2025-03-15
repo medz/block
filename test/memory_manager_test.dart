@@ -6,8 +6,6 @@
 import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:block/block.dart';
-import 'package:block/src/memory_manager.dart';
-import 'package:block/src/disposable_block.dart';
 
 void main() {
   group('内存管理器测试', () {
