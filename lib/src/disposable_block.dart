@@ -6,6 +6,9 @@
 import 'dart:typed_data';
 import 'package:block/block.dart';
 
+// ByteDataView 已经通过 package:block/block.dart 导出，无需单独导入
+// import 'byte_data_view.dart';
+
 /// A disposable extension of Block that provides explicit memory management.
 ///
 /// This class wraps a standard Block and adds the ability to explicitly
