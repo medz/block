@@ -3,14 +3,14 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-/// 缓存项的优先级
+/// 缓存优先级枚举
 enum CachePriority {
-  /// 高优先级缓存，仅在高内存压力下清理
-  high,
+  /// 低优先级，在内存压力下最先被清理
+  low,
 
-  /// 中优先级缓存，在中度内存压力下清理
+  /// 中优先级，在中度内存压力下被清理
   medium,
 
-  /// 低优先级缓存，在轻度内存压力下清理
-  low,
+  /// 高优先级，只有在高内存压力下才会被清理
+  high,
 }

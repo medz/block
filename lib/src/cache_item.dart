@@ -7,26 +7,24 @@ import 'cache_priority.dart';
 
 /// 缓存项
 class CacheItem<T> {
-  /// 缓存的数据
+  /// 数据
   final T data;
 
-  /// 缓存项的内存占用（字节）
+  /// 内存消耗（字节）
   final int memoryCost;
 
-  /// 缓存项的优先级
+  /// 优先级
   final CachePriority priority;
 
   /// 最后访问时间
-  DateTime lastAccessed = DateTime.now();
+  DateTime lastAccessed;
 
-  /// 创建时间
-  final DateTime createdAt = DateTime.now();
-
+  /// 构造函数
   CacheItem({
     required this.data,
     required this.memoryCost,
     this.priority = CachePriority.medium,
-  });
+  }) : lastAccessed = DateTime.now();
 
   /// 更新最后访问时间
   void touch() {
