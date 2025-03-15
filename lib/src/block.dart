@@ -344,12 +344,12 @@ class DataStore {
     int freedBytes = 0;
 
     // 清理缓存
-    freedBytes += _BlockCache.instance.clearByPressureLevel(
+    freedBytes += BlockCache.instance.clearByPressureLevel(
       MemoryPressureLevel.medium,
     );
 
     // 清理未引用的共享数据
-    freedBytes += cleanUnreferencedData();
+    freedBytes += DataStore.instance.reduceMemoryUsage();
 
     return freedBytes;
   }
@@ -443,7 +443,7 @@ enum MemoryPressureLevel {
 }
 
 /// 缓存项的优先级
-enum _CachePriority {
+enum CachePriority {
   /// 高优先级缓存，仅在高内存压力下清理
   high,
 
@@ -455,7 +455,7 @@ enum _CachePriority {
 }
 
 /// 缓存项
-class _CacheItem<T> {
+class CacheItem<T> {
   /// 缓存的数据
   final T data;
 
@@ -463,7 +463,7 @@ class _CacheItem<T> {
   final int memoryCost;
 
   /// 缓存项的优先级
-  final _CachePriority priority;
+  final CachePriority priority;
 
   /// 最后访问时间
   DateTime lastAccessed = DateTime.now();
@@ -471,10 +471,10 @@ class _CacheItem<T> {
   /// 创建时间
   final DateTime createdAt = DateTime.now();
 
-  _CacheItem({
+  CacheItem({
     required this.data,
     required this.memoryCost,
-    this.priority = _CachePriority.medium,
+    this.priority = CachePriority.medium,
   });
 
   /// 更新最后访问时间
@@ -484,18 +484,18 @@ class _CacheItem<T> {
 }
 
 /// 缓存池管理类
-class _BlockCache {
+class BlockCache {
   /// 单例实例
-  static final _BlockCache _instance = _BlockCache._();
+  static final BlockCache _instance = BlockCache._();
 
   /// 获取单例实例
-  static _BlockCache get instance => _instance;
+  static BlockCache get instance => _instance;
 
   /// 私有构造函数
-  _BlockCache._();
+  BlockCache._();
 
   /// 缓存池，按照Key存储缓存项
-  final Map<String, _CacheItem> _cache = {};
+  final Map<String, CacheItem> _cache = {};
 
   /// 缓存池内存使用总量（字节）
   int _totalMemoryCost = 0;
@@ -549,7 +549,7 @@ class _BlockCache {
     required String key,
     required T data,
     required int memoryCost,
-    _CachePriority priority = _CachePriority.medium,
+    CachePriority priority = CachePriority.medium,
   }) {
     // 如果已存在此key，先移除旧数据
     if (_cache.containsKey(key)) {
@@ -562,7 +562,7 @@ class _BlockCache {
     }
 
     // 添加新缓存项
-    final item = _CacheItem<T>(
+    final item = CacheItem<T>(
       data: data,
       memoryCost: memoryCost,
       priority: priority,
@@ -583,7 +583,7 @@ class _BlockCache {
   }
 
   /// 检查缓存项是否过期
-  bool _isExpired(_CacheItem item) {
+  bool _isExpired(CacheItem item) {
     final now = DateTime.now();
     return now.difference(item.lastAccessed).inMilliseconds >
         _defaultExpirationMs;
@@ -604,12 +604,12 @@ class _BlockCache {
     switch (level) {
       case MemoryPressureLevel.low:
         // 轻度压力：只清理低优先级缓存
-        freedBytes = _clearByPriority(_CachePriority.low);
+        freedBytes = _clearByPriority(CachePriority.low);
         break;
       case MemoryPressureLevel.medium:
         // 中度压力：清理低优先级和中优先级缓存
-        freedBytes = _clearByPriority(_CachePriority.low);
-        freedBytes += _clearByPriority(_CachePriority.medium);
+        freedBytes = _clearByPriority(CachePriority.low);
+        freedBytes += _clearByPriority(CachePriority.medium);
         break;
       case MemoryPressureLevel.high:
       case MemoryPressureLevel.critical:
@@ -627,7 +627,7 @@ class _BlockCache {
   }
 
   /// 清理指定优先级的缓存
-  int _clearByPriority(_CachePriority priority) {
+  int _clearByPriority(CachePriority priority) {
     int freedBytes = 0;
     final keysToRemove = <String>[];
 
@@ -680,7 +680,7 @@ class _BlockCache {
       // 从最早访问的开始移除，直到空间足够
       for (final entry in sortedItems) {
         // 不移除高优先级的缓存，除非实在没有空间
-        if (entry.value.priority == _CachePriority.high &&
+        if (entry.value.priority == CachePriority.high &&
             _totalMemoryCost + requiredSpace - entry.value.memoryCost <=
                 _maxMemoryCost) {
           continue;
@@ -907,7 +907,7 @@ class Block {
     int freedBytes = 0;
 
     // 清理缓存
-    freedBytes += _BlockCache.instance.clearByPressureLevel(
+    freedBytes += BlockCache.instance.clearByPressureLevel(
       MemoryPressureLevel.medium,
     );
 
@@ -924,20 +924,20 @@ class Block {
     switch (level) {
       case MemoryPressureLevel.low:
         // 轻度压力：清理非关键缓存
-        freedBytes = _BlockCache.instance.clearByPressureLevel(level);
+        freedBytes = BlockCache.instance.clearByPressureLevel(level);
         // 增加当轻度压力下的缓存和未使用数据的清理频率
         freedBytes += DataStore.instance.cleanUnreferencedData();
         break;
       case MemoryPressureLevel.medium:
         // 中度压力：清理所有缓存
-        freedBytes = _BlockCache.instance.clearByPressureLevel(level);
+        freedBytes = BlockCache.instance.clearByPressureLevel(level);
         // 清理未引用的共享数据
         freedBytes += DataStore.instance.reduceMemoryUsage();
         break;
       case MemoryPressureLevel.high:
       case MemoryPressureLevel.critical:
         // 高压力：清理所有缓存并强制释放所有可能的内存
-        freedBytes = _BlockCache.instance.clearByPressureLevel(level);
+        freedBytes = BlockCache.instance.clearByPressureLevel(level);
         freedBytes += reduceMemoryUsage();
 
         // 在高压力或危急情况下，主动触发垃圾回收
@@ -948,7 +948,7 @@ class Block {
         break;
       case MemoryPressureLevel.none:
         // 无压力：只清理过期缓存和未引用的数据
-        freedBytes = _BlockCache.instance.clearByPressureLevel(level);
+        freedBytes = BlockCache.instance.clearByPressureLevel(level);
         // 清理未引用的共享数据
         freedBytes += DataStore.instance.cleanUnreferencedData();
         break;
@@ -1864,12 +1864,12 @@ class Block {
   /// Block.setCacheLimit(20 * 1024 * 1024);
   /// ```
   static void setCacheLimit(int maxBytes) {
-    _BlockCache.instance.maxMemoryCost = maxBytes;
+    BlockCache.instance.maxMemoryCost = maxBytes;
   }
 
   /// 获取当前缓存使用量（字节）
   static int getCacheUsage() {
-    return _BlockCache.instance.totalMemoryCost;
+    return BlockCache.instance.totalMemoryCost;
   }
 
   /// 设置缓存项过期时间（毫秒）
@@ -1879,12 +1879,12 @@ class Block {
   /// Block.setCacheExpirationTime(10 * 60 * 1000);
   /// ```
   static void setCacheExpirationTime(int milliseconds) {
-    _BlockCache.instance.defaultExpirationMs = milliseconds;
+    BlockCache.instance.defaultExpirationMs = milliseconds;
   }
 
   /// 清空所有缓存
   static void clearCache() {
-    _BlockCache.instance.clear();
+    BlockCache.instance.clear();
   }
 
   /// 获取缓存的Block
@@ -1892,7 +1892,7 @@ class Block {
   /// 通过指定的键查找缓存中的Block
   /// 如果未找到或已过期，返回null
   static Block? getFromCache(String key) {
-    return _BlockCache.instance.get<Block>(key);
+    return BlockCache.instance.get<Block>(key);
   }
 
   /// 存储Block到缓存
@@ -1905,27 +1905,27 @@ class Block {
     Block block, {
     String priority = 'medium',
   }) {
-    _CachePriority cachePriority;
+    CachePriority cachePriority;
 
     switch (priority.toLowerCase()) {
       case 'high':
-        cachePriority = _CachePriority.high;
+        cachePriority = CachePriority.high;
         break;
       case 'low':
-        cachePriority = _CachePriority.low;
+        cachePriority = CachePriority.low;
         break;
       case 'medium':
       default:
-        cachePriority = _CachePriority.medium;
+        cachePriority = CachePriority.medium;
         break;
     }
 
     // 如果Block太大超过缓存限制，直接返回不缓存
-    if (block._memoryCost > _BlockCache.instance.maxMemoryCost) {
+    if (block._memoryCost > BlockCache.instance.maxMemoryCost) {
       return;
     }
 
-    _BlockCache.instance.put<Block>(
+    BlockCache.instance.put<Block>(
       key: key,
       data: block,
       memoryCost: block._memoryCost,
@@ -1935,7 +1935,7 @@ class Block {
 
   /// 从缓存中移除指定的Block
   static void removeFromCache(String key) {
-    _BlockCache.instance.remove(key);
+    BlockCache.instance.remove(key);
   }
 
   /// 获取数据去重的统计信息
