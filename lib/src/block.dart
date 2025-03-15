@@ -19,6 +19,7 @@ import 'dart:typed_data';
 import 'byte_data_view.dart';
 import 'deferred_operation.dart';
 import 'memory_manager.dart';
+import 'shared_data.dart';
 
 /// 数据去重存储类，用于保存唯一的数据块
 ///
@@ -400,17 +401,6 @@ class DataStore {
       );
     }
   }
-}
-
-/// 共享数据结构，包含数据和引用计数
-class SharedData {
-  /// 数据内容
-  final Uint8List data;
-
-  /// 引用计数
-  int refCount;
-
-  SharedData(this.data, this.refCount);
 }
 
 /// 用于跟踪Block内存使用的辅助类
