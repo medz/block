@@ -198,6 +198,14 @@ class _DataStore {
   /// 重复数据的块计数
   int _duplicateBlockCount = 0;
 
+  /// 重置统计数据
+  ///
+  /// 重置所有统计计数器，但不清除已存储的数据
+  void resetStatistics() {
+    _totalSavedMemory = 0;
+    _duplicateBlockCount = 0;
+  }
+
   /// 获取总共节省的内存（字节）
   int get totalSavedMemory => _totalSavedMemory;
 
@@ -1951,5 +1959,10 @@ class Block {
   /// ```
   static int getDataDeduplicationDuplicateCount() {
     return _DataStore.instance.duplicateBlockCount;
+  }
+
+  /// 重置数据去重统计
+  static void resetDataDeduplication() {
+    _DataStore.instance.resetStatistics();
   }
 }

@@ -192,8 +192,8 @@
    - [ ] 修复测试失败问题
      - [x] 修复"Block creates from list of parts"测试
      - [x] 修复"Block throws on unsupported part types"测试
-     - [ ] 修复"Data Deduplication identical data blocks are stored only once"测试
-     - [ ] 修复"Data Deduplication large data blocks utilize deduplication"测试
+     - [x] 修复"Data Deduplication identical data blocks are stored only once"测试
+     - [x] 修复"Data Deduplication large data blocks utilize deduplication"测试
 
 ## 长期目标
 

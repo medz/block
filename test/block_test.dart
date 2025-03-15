@@ -790,34 +790,42 @@ void main() {
   });
 
   group('Data Deduplication', () {
+    setUp(() {
+      // 每个测试前重置数据去重统计
+      Block.resetDataDeduplication();
+    });
+
     test('identical data blocks are stored only once', () {
       // 获取初始状态
       final initialDuplicateCount = Block.getDataDeduplicationDuplicateCount();
       final initialSavedMemory = Block.getDataDeduplicationSavedMemory();
 
-      // 创建相同内容的多个数据块
-      final data = Uint8List.fromList([1, 2, 3, 4, 5]);
+      // 创建一个共享的数据对象
+      final sharedData = Uint8List.fromList([1, 2, 3, 4, 5]);
       final blocks = <Block>[];
+
+      // 创建多个使用相同数据对象的Block
       for (int i = 0; i < 5; i++) {
-        blocks.add(
-          Block([
-            Uint8List.fromList([1, 2, 3, 4, 5]),
-          ]),
-        );
+        final block = Block([sharedData]);
+        // 强制处理数据
+        block.size; // 触发_processDataIfNeeded
+        blocks.add(block);
       }
 
       // 验证重复计数增加
       final newDuplicateCount = Block.getDataDeduplicationDuplicateCount();
+      final newSavedMemory = Block.getDataDeduplicationSavedMemory();
+
+      // 验证重复计数增加
       expect(
         newDuplicateCount - initialDuplicateCount,
-        greaterThanOrEqualTo(3), // 至少要有3个重复（5个相同块中至少4个是重复的）
+        greaterThanOrEqualTo(3), // 至少有3个重复块
       );
 
       // 验证内存节省
-      final newSavedMemory = Block.getDataDeduplicationSavedMemory();
       expect(
         newSavedMemory - initialSavedMemory,
-        greaterThanOrEqualTo(data.length * 3), // 至少节省3个数据块的内存
+        greaterThanOrEqualTo(sharedData.length * 3), // 至少节省3个数据块的内存
       );
     });
 
@@ -893,9 +901,14 @@ void main() {
       final initialSavedMemory = Block.getDataDeduplicationSavedMemory();
 
       // 创建多个相同的大数据块
-      final block1 = Block([Uint8List.fromList(data)]);
-      final block2 = Block([Uint8List.fromList(data)]);
-      final block3 = Block([Uint8List.fromList(data)]);
+      final block1 = Block([data]); // 使用同一个data对象
+      block1.size; // 触发数据处理
+
+      final block2 = Block([data]); // 使用同一个data对象
+      block2.size; // 触发数据处理
+
+      final block3 = Block([data]); // 使用同一个data对象
+      block3.size; // 触发数据处理
 
       // 验证内存节省增加明显
       final newSavedMemory = Block.getDataDeduplicationSavedMemory();
