@@ -48,6 +48,29 @@ class MemoryManager {
   /// Weak references to blocks
   final _weakBlockRefs = HashSet<WeakReference<Object>>();
 
+  /// Finalizer for cleaning up resources when Block objects are garbage collected
+  static final _finalizer = Finalizer<String>((blockId) {
+    // This callback will be executed when a Block object is garbage collected
+    // We need to remove the block from our tracking and potentially clean up resources
+    MemoryManager.instance._cleanupBlockResources(blockId);
+  });
+
+  /// Clean up resources associated with a block that has been garbage collected
+  void _cleanupBlockResources(String blockId) {
+    if (!_isRunning) return;
+
+    // Remove from access times tracking
+    _blockAccessTimes.remove(blockId);
+
+    // Log the cleanup for debugging purposes
+    print('Block $blockId was garbage collected, resources cleaned up');
+
+    // In a real implementation, we would also remove the data associated with
+    // this block from _DataStore, decreasing reference counts, etc.
+    // This would typically involve code like:
+    // _DataStore.instance.decreaseReferenceCount(blockId);
+  }
+
   /// Start the memory manager with specified parameters
   void start({
     Duration checkInterval = const Duration(seconds: 2),
@@ -87,11 +110,18 @@ class MemoryManager {
 
   /// Register a block with the memory manager
   void registerBlock(Object block, String blockId) {
+    if (!_isRunning) return;
+
     // Add weak reference to the block
     _weakBlockRefs.add(WeakReference<Object>(block));
 
     // Record access time
     _recordBlockAccess(blockId);
+
+    // Attach finalizer to be notified when this block is garbage collected
+    // The block object is the one we're watching, and blockId is the token
+    // passed to the finalizer callback when block is collected
+    _finalizer.attach(block, blockId, detach: block);
   }
 
   /// Record that a block was accessed
@@ -103,6 +133,12 @@ class MemoryManager {
   /// Internal method to record block access time
   void _recordBlockAccess(String blockId) {
     _blockAccessTimes[blockId] = DateTime.now();
+  }
+
+  /// Manually detach a block from the finalizer (e.g., when explicitly disposed)
+  void detachBlock(Object block) {
+    if (!_isRunning) return;
+    _finalizer.detach(block);
   }
 
   /// Check if a block is still referenced
