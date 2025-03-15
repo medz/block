@@ -33,29 +33,25 @@ Create a block from various sources:
 import 'package:block/block.dart';
 import 'dart:typed_data';
 
-// From a builder function
-final block = Block((updates) {
-  updates(Uint8List.fromList([1, 2, 3]));
-  updates(Uint8List.fromList([4, 5, 6]));
-});
+// Basic usage - similar to Web API's Blob constructor
+final block = Block([
+  'Hello, ',
+  Uint8List.fromList([119, 111, 114, 108, 100]), // "world" in UTF-8
+  '!'
+], type: 'text/plain');
 
-// From strings
-final textBlock = Block.fromString(['Hello', ' ', 'World']);
+// Block from a single Uint8List
+final binaryBlock = Block([Uint8List.fromList([1, 2, 3, 4, 5])]);
 
-// From Uint8List instances
-final bytesBlock = Block.fromBytes([
-  Uint8List.fromList([1, 2, 3]),
-  Uint8List.fromList([4, 5, 6]),
-]);
-
-// From a stream
-final streamBlock = Block.fromStream(
-  someStream, // Stream<Uint8List>
-  expectedSize, // int
-);
+// Block from ByteData
+final buffer = Uint8List(4).buffer;
+final byteData = ByteData.view(buffer)..setInt32(0, 42);
+final byteDataBlock = Block([byteData]);
 
 // Empty block
-final emptyBlock = Block.empty();
+final emptyBlock1 = Block([]);
+// Or using the convenience method
+final emptyBlock2 = Block.empty(type: 'application/octet-stream');
 ```
 
 ### Accessing Data
@@ -66,16 +62,19 @@ Access the data in various formats:
 // Get the size in bytes
 final size = block.size;
 
-// Get as a stream of chunks
-await for (final chunk in block.stream()) {
+// Get the MIME type
+final type = block.type;
+
+// Get as a complete Uint8List (corresponds to Blob.arrayBuffer())
+final bytes = await block.arrayBuffer();
+
+// Get as a string (UTF-8 decoded) (corresponds to Blob.text())
+final text = await block.text();
+
+// Get as a stream of chunks (Dart-specific addition)
+await for (final chunk in block.stream(chunkSize: 1024)) {
   // Process each chunk
 }
-
-// Get as a complete Uint8List
-final bytes = await block.bytes();
-
-// Get as a string (UTF-8 decoded)
-final text = await block.text();
 ```
 
 ### Slicing
@@ -94,47 +93,48 @@ final toEnd = block.slice(5);
 final lastFive = block.slice(-5);
 // For a block of size 10, this gets bytes from index 0 to index 7 (exclusive)
 final exceptLastTwo = block.slice(0, -2);
+
+// Specify a different content type for the slice
+final htmlSlice = block.slice(0, 100, 'text/html');
 ```
 
 ### Example: Processing a Large File
 
 ```dart
 import 'dart:io';
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:block/block.dart';
 
 Future<void> processLargeFile(String path) async {
   final file = File(path);
   final fileSize = await file.length();
 
-  // Create a block from the file's content
-  final block = Block.fromStream(file.openRead(), fileSize);
+  // Read the file into memory - in a real app, you might want to use a more
+  // memory-efficient approach for very large files
+  final fileData = await file.readAsBytes();
 
-  // ⚠️ Important: When using Block.fromStream, be aware that the underlying
-  // stream will be consumed when first accessed. For non-broadcast streams
-  // (like file streams), this means you can only access the data once
-  // unless it has been cached.
-
-  // It's recommended to fully read the block once before creating slices
-  // or cache the block's bytes if you'll need multiple access points:
-  final fullBytes = await block.bytes(); // This caches the entire content
+  // Create a block from the file data
+  final block = Block([fileData]);
 
   // Process the first 1MB
   final header = block.slice(0, 1024 * 1024);
   final headerText = await header.text();
   print('File header: $headerText');
 
-  // Now you can safely process the file in chunks
-  final chunkSize = 10 * 1024 * 1024;
+  // Process the file in chunks
+  final chunkSize = 10 * 1024 * 1024; // 10MB chunks
   final chunksCount = (fileSize / chunkSize).ceil();
 
   for (int i = 0; i < chunksCount; i++) {
     final start = i * chunkSize;
     final end = (start + chunkSize) > fileSize ? fileSize : start + chunkSize;
 
-    // These slices are safe to use because the full content is already cached
     final chunk = block.slice(start, end);
-    final chunkBytes = await chunk.bytes();
-    print('Processed chunk ${i + 1}/$chunksCount: ${chunkBytes.length} bytes');
+    final chunkData = await chunk.arrayBuffer();
+    print('Processed chunk ${i + 1}/$chunksCount: ${chunkData.length} bytes');
+
+    // Do something with the chunk data...
   }
 }
 ```
@@ -142,19 +142,10 @@ Future<void> processLargeFile(String path) async {
 ## Performance Considerations
 
 - Blocks are lazily initialized and only allocate memory when needed
-- The `bytes()` and `text()` methods cache their results for subsequent calls
+- The `arrayBuffer()` and `text()` methods return cached results for subsequent calls
 - Slicing operations don't copy data until the slice content is actually accessed
 - For blocks larger than 10MB, special handling is used to optimize memory usage
-- Stream-based blocks cache the stream content after first access, allowing multiple slices to be created efficiently
-
-## Stream-Based Blocks
-
-When creating blocks from streams, keep in mind:
-
-- The stream will be consumed when the block is accessed
-- Non-broadcast streams can only be consumed once
-- The stream's total byte count must match the specified size
-- Once consumed, the data is cached for future access
+- The `stream()` method provides efficient access to large blocks without loading the entire content into memory at once
 
 ## API Reference
 
@@ -189,3 +180,15 @@ This package is licensed under the MIT License - see the [LICENSE](LICENSE) file
     <img src="https://contrib.rocks/image?repo=medz/block" alt="Contributors" />
   </a>
 </p>
+
+## 性能考虑
+
+Block 库设计了以下几个优化点：
+
+1. **高效内存使用**: Block 采用分段存储策略，特别适合处理大型二进制数据。对于大于 1MB 的数据，会自动拆分为多个数据块进行存储，减少内存碎片并优化内存使用。
+
+2. **延迟操作**: 创建 Block 或调用`slice()`方法时，Block 并不会立即复制数据。只有在实际需要获取完整数据内容时（如调用`arrayBuffer()`）才会执行数据复制操作。
+
+3. **流式处理**: 对于大型数据，可以使用`stream()`方法以较小的块进行处理，避免一次性加载全部内容到内存中。
+
+4. **无复制切片**: 使用引用计数机制，`slice()`操作只保存对原始数据的引用和偏移量，避免不必要的数据复制。
