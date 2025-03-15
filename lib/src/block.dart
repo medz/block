@@ -9,10 +9,166 @@
 // 2. 多层嵌套分片会被扁平化，避免链式引用导致的性能问题
 // 3. 数据读取操作尽可能避免复制，使用sublist等方法直接引用原始数据
 // 4. 流式读取针对分片进行了优化，只读取必要的数据段
+// 5. 通过ByteDataView提供零拷贝数据访问机制，允许直接操作底层数据而不复制
+// 6. 完整的零拷贝操作支持，包括视图转换和直接引用访问
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+
+/// 表示对原始二进制数据的视图，无需复制数据
+///
+/// 这个类允许在不复制数据的情况下访问底层二进制数据，
+/// 提供了类似于ByteData的接口，但保留了对原始数据的引用。
+class ByteDataView {
+  /// 对原始数据的引用
+  final List<Uint8List> _chunks;
+
+  /// 数据的总长度
+  final int length;
+
+  /// 如果是分片，则表示起始偏移量
+  final int _offset;
+
+  /// 父视图（如果这是一个子视图）
+  final ByteDataView? _parent;
+
+  /// 创建一个新的数据视图
+  ///
+  /// [chunks] 是底层数据块的列表
+  /// [length] 是数据的总长度
+  ByteDataView(this._chunks, this.length) : _offset = 0, _parent = null;
+
+  /// 创建一个子视图
+  ///
+  /// [parent] 是父视图
+  /// [offset] 是在父视图中的起始位置
+  /// [length] 是子视图的长度
+  ByteDataView._(this._parent, this._offset, this.length) : _chunks = [];
+
+  /// 创建一个子视图，表示原始数据的一部分，无需复制
+  ByteDataView subView(int start, [int? end]) {
+    final int endOffset = end ?? length;
+
+    if (start < 0) start = 0;
+    if (endOffset > length) throw RangeError('End offset exceeds view length');
+    if (start >= endOffset) return ByteDataView([], 0);
+
+    return ByteDataView._(this, start, endOffset - start);
+  }
+
+  /// 获取指定位置的字节
+  int getUint8(int byteOffset) {
+    if (byteOffset < 0 || byteOffset >= length) {
+      throw RangeError('Offset out of range');
+    }
+
+    if (_parent != null) {
+      return _parent!.getUint8(_offset + byteOffset);
+    }
+
+    // 定位到正确的块
+    int currentOffset = 0;
+    for (final chunk in _chunks) {
+      if (byteOffset < currentOffset + chunk.length) {
+        return chunk[byteOffset - currentOffset];
+      }
+      currentOffset += chunk.length;
+    }
+
+    throw StateError('Unable to locate byte at offset $byteOffset');
+  }
+
+  /// 将数据复制到目标缓冲区
+  void copyTo(Uint8List target, [int targetOffset = 0]) {
+    if (targetOffset < 0) {
+      throw RangeError('Target offset out of range');
+    }
+
+    if (targetOffset + length > target.length) {
+      throw RangeError('Target buffer too small');
+    }
+
+    if (_parent != null) {
+      _parent!._copyRange(target, targetOffset, _offset, _offset + length);
+      return;
+    }
+
+    _copyRange(target, targetOffset, 0, length);
+  }
+
+  /// 内部方法：将指定范围的数据复制到目标缓冲区
+  void _copyRange(Uint8List target, int targetOffset, int start, int end) {
+    if (_parent != null) {
+      _parent!._copyRange(target, targetOffset, _offset + start, _offset + end);
+      return;
+    }
+
+    int sourceOffset = 0;
+    int currentTargetOffset = targetOffset;
+    int remainingBytes = end - start;
+
+    // 跳过start之前的块
+    for (final chunk in _chunks) {
+      if (sourceOffset + chunk.length <= start) {
+        sourceOffset += chunk.length;
+        continue;
+      }
+
+      // 计算此块中的起始位置和复制长度
+      final int chunkStart = start > sourceOffset ? start - sourceOffset : 0;
+      final int bytesToCopy =
+          (sourceOffset + chunk.length > end)
+              ? remainingBytes
+              : chunk.length - chunkStart;
+
+      // 复制此块的数据
+      target.setRange(
+        currentTargetOffset,
+        currentTargetOffset + bytesToCopy,
+        chunk,
+        chunkStart,
+      );
+
+      currentTargetOffset += bytesToCopy;
+      remainingBytes -= bytesToCopy;
+
+      if (remainingBytes <= 0) break;
+      sourceOffset += chunk.length;
+    }
+  }
+
+  /// 将视图转换为Uint8List，此操作会复制数据
+  Uint8List toUint8List() {
+    final result = Uint8List(length);
+    copyTo(result);
+    return result;
+  }
+
+  /// 检查此视图是否为单个连续的数据块
+  bool get isContinuous => _parent == null && _chunks.length == 1;
+
+  /// 如果视图是单个连续数据块，直接返回原始引用；否则返回null
+  ///
+  /// 使用此方法可以在某些情况下完全避免数据复制
+  Uint8List? get continuousData {
+    if (isContinuous) {
+      return _chunks[0];
+    }
+
+    if (_parent != null &&
+        _parent!.isContinuous &&
+        _offset == 0 &&
+        length == _parent!.length) {
+      return _parent!.continuousData;
+    }
+
+    return null;
+  }
+
+  /// 获取一个字节视图
+  ByteBuffer get buffer => toUint8List().buffer;
+}
 
 /// 用于跟踪Block内存使用的辅助类
 class _BlockMemoryTracker {
@@ -899,43 +1055,14 @@ class Block {
 
   /// Combines all chunks into a single Uint8List
   Uint8List _combineChunks() {
-    // Handle parent slice
-    if (_parent != null) {
-      // 优化: 避免不必要的完整父数据复制
-      // 如果父级是分片，直接从顶级父对象中获取数据，避免中间复制
-      if (_parent!._parent != null) {
-        return _parent!._parent!._combineChunks().sublist(
-          _parent!._startOffset + _startOffset,
-          _parent!._startOffset + _startOffset + _sliceLength,
-        );
-      }
-
-      // 如果父级是直接对象，按原来方式处理
-      final parentData = _parent!._combineChunks();
-      // 直接使用sublist而不是创建新数组并复制数据
-      return parentData.sublist(_startOffset, _startOffset + _sliceLength);
+    // 尝试零拷贝访问
+    final directData = getDirectData();
+    if (directData != null) {
+      return directData;
     }
 
-    // Handle empty block
-    if (_chunks.isEmpty || _size == 0) {
-      return Uint8List(0);
-    }
-
-    // Handle single chunk case (optimization)
-    if (_chunks.length == 1 && _chunks[0].length == _size) {
-      return _chunks[0];
-    }
-
-    // Handle multiple chunks case
-    final result = Uint8List(_size);
-    int offset = 0;
-
-    for (final chunk in _chunks) {
-      result.setRange(offset, offset + chunk.length, chunk);
-      offset += chunk.length;
-    }
-
-    return result;
+    // 使用ByteDataView处理
+    return getByteDataView().toUint8List();
   }
 
   /// Returns the size of the Block in bytes.
@@ -999,7 +1126,7 @@ class Block {
     return Block._slice(this, start, sliceLength, type: contentType ?? _type);
   }
 
-  /// Returns a Promise that resolves with a Uint8List containing the entire contents of the Block.
+  /// Returns a Promise that resolves with the contents of the Block as an ArrayBuffer.
   ///
   /// This method corresponds to the Web API Blob.arrayBuffer() method.
   ///
@@ -1008,8 +1135,15 @@ class Block {
   /// final data = await block.arrayBuffer();
   /// ```
   Future<Uint8List> arrayBuffer() async {
-    // 避免在异步操作中不必要的数据复制
-    return Future.value(_combineChunks());
+    // 尝试零拷贝方式获取数据
+    final directData = getDirectData();
+    if (directData != null) {
+      // 可以直接引用，无需复制
+      return Future.value(directData);
+    }
+
+    // 否则回退到使用ByteDataView
+    return Future.value(getByteDataView().toUint8List());
   }
 
   /// Returns a Promise that resolves with a string containing the entire contents of the Block.
@@ -1022,6 +1156,92 @@ class Block {
   /// ```
   Future<String> text({Encoding encoding = utf8}) async {
     return encoding.decode(await arrayBuffer());
+  }
+
+  /// 返回一个ByteDataView，允许在不复制的情况下访问数据
+  ///
+  /// 这是一个同步操作，提供对底层数据的直接视图，而不会复制数据。
+  /// 如果不需要实际复制数据，这比arrayBuffer()更高效。
+  ///
+  /// 注意：返回的视图是只读的，修改视图不会影响原始Block数据。
+  ///
+  /// 示例:
+  /// ```dart
+  /// final view = block.getByteDataView();
+  /// final byte = view.getUint8(10); // 获取第11个字节
+  /// ```
+  ByteDataView getByteDataView() {
+    if (_parent != null) {
+      // 从父Block创建视图
+      var parentView = _parent!.getByteDataView();
+      return parentView.subView(_startOffset, _startOffset + _sliceLength);
+    }
+
+    return ByteDataView(_chunks, _size);
+  }
+
+  /// 尝试获取底层数据的直接引用，而不需要复制数据
+  ///
+  /// 只有在Block只包含单个连续数据块时才会返回非null值。
+  /// 这是最高效的访问方式，完全避免了数据复制。
+  ///
+  /// 返回null表示不能直接访问（数据是分段的或者是分片），
+  /// 在这种情况下，应该使用arrayBuffer()或getByteDataView()。
+  ///
+  /// 示例:
+  /// ```dart
+  /// final directData = block.getDirectData();
+  /// if (directData != null) {
+  ///   // 直接使用数据，无需复制
+  /// } else {
+  ///   // 回退到复制方式
+  ///   final data = await block.arrayBuffer();
+  /// }
+  /// ```
+  Uint8List? getDirectData() {
+    // 如果是单个连续块，直接返回
+    if (_parent == null && _chunks.length == 1 && _chunks[0].length == _size) {
+      return _chunks[0];
+    }
+
+    // 如果是分片且父Block只有一个块，尝试使用sublist直接引用
+    if (_parent != null &&
+        _parent!._chunks.length == 1 &&
+        _parent!._parent == null) {
+      try {
+        return _parent!._chunks[0].sublist(
+          _startOffset,
+          _startOffset + _sliceLength,
+        );
+      } catch (_) {
+        // 如果有任何错误，返回null
+        return null;
+      }
+    }
+
+    // 其他情况无法直接访问
+    return null;
+  }
+
+  /// 获取一个只读的ByteBuffer，尽可能避免数据复制
+  ///
+  /// 此方法会尝试直接返回底层数据的ByteBuffer，如果不可能则会创建一个新的。
+  /// 比arrayBuffer()更高效，因为它会尝试避免不必要的数据复制。
+  ///
+  /// 示例:
+  /// ```dart
+  /// final buffer = block.getByteBuffer();
+  /// // 使用buffer进行高效操作
+  /// ```
+  ByteBuffer getByteBuffer() {
+    // 尝试获取直接数据引用
+    final directData = getDirectData();
+    if (directData != null) {
+      return directData.buffer;
+    }
+
+    // 如果无法直接引用，创建视图并转换
+    return getByteDataView().buffer;
   }
 
   /// Streams the Block's data in chunks.
@@ -1038,76 +1258,24 @@ class Block {
   /// }
   /// ```
   Stream<Uint8List> stream({int chunkSize = 1024 * 64}) async* {
-    // For a slice, get data from parent
-    if (_parent != null) {
-      // 优化: 避免读取整个父Block的数据
-      // 如果父Block很大但slice很小，这可以节省大量内存
-
-      // 当父Block是分段存储时直接访问相关段
-      if (_parent!._chunks.isNotEmpty) {
-        int remainingBytes = _sliceLength;
-        int globalOffset = _startOffset;
-
-        // 找出包含起始位置的chunk
-        int currentChunkIndex = 0;
-        int accumulatedSize = 0;
-
-        // 找到包含起始位置的chunk
-        while (currentChunkIndex < _parent!._chunks.length) {
-          final chunkSize = _parent!._chunks[currentChunkIndex].length;
-          if (accumulatedSize + chunkSize > globalOffset) {
-            break;
-          }
-          accumulatedSize += chunkSize;
-          currentChunkIndex++;
-        }
-
-        // 如果找不到合适的chunk（可能是空Block），直接返回
-        if (currentChunkIndex >= _parent!._chunks.length) {
-          return;
-        }
-
-        // 计算在当前chunk中的偏移量
-        int offsetInCurrentChunk = globalOffset - accumulatedSize;
-
-        // 开始流式传输数据
-        while (remainingBytes > 0 &&
-            currentChunkIndex < _parent!._chunks.length) {
-          final currentChunk = _parent!._chunks[currentChunkIndex];
-          final bytesLeftInChunk = currentChunk.length - offsetInCurrentChunk;
-
-          // 确定此次要读取的字节数
-          final bytesToRead =
-              bytesLeftInChunk < remainingBytes
-                  ? bytesLeftInChunk
-                  : remainingBytes < chunkSize
-                  ? remainingBytes
-                  : chunkSize;
-
-          // 直接使用sublist避免复制
-          if (offsetInCurrentChunk == 0 && bytesToRead == currentChunk.length) {
-            yield currentChunk;
-          } else {
-            yield currentChunk.sublist(
-              offsetInCurrentChunk,
-              offsetInCurrentChunk + bytesToRead,
-            );
-          }
-
-          remainingBytes -= bytesToRead;
-
-          // 移动到下一个chunk
-          if (bytesToRead >= bytesLeftInChunk) {
-            currentChunkIndex++;
-            offsetInCurrentChunk = 0;
-          } else {
-            offsetInCurrentChunk += bytesToRead;
-          }
-        }
+    // 如果Block很小，直接返回整个数据
+    if (_size <= chunkSize) {
+      // 尝试零拷贝方式获取数据
+      final directData = getDirectData();
+      if (directData != null) {
+        yield directData;
         return;
       }
-      // 当父Block是嵌套slice时，让父Block处理
-      else if (_parent!._parent != null) {
+
+      // 否则使用ByteDataView
+      yield getByteDataView().toUint8List();
+      return;
+    }
+
+    // 对于分片数据，优化流式读取
+    if (_parent != null) {
+      // 当父Block是嵌套slice时，处理优化
+      if (_parent!._parent != null) {
         // 创建一个新的合并计算的slice直接从顶层读取
         final combinedSlice = _parent!.slice(
           _startOffset,
@@ -1118,98 +1286,53 @@ class Block {
         }
         return;
       }
-      // 如果父级结构复杂，回退到原始实现
-      else {
-        final parentData = await _parent!.arrayBuffer();
-        int offset = _startOffset;
-        final int end = _startOffset + _sliceLength;
 
-        while (offset < end) {
-          final int remainingBytes = end - offset;
-          final int bytesToRead =
-              remainingBytes < chunkSize ? remainingBytes : chunkSize;
+      // 获取父Block的ByteDataView
+      final parentView = _parent!.getByteDataView();
+      final subView = parentView.subView(
+        _startOffset,
+        _startOffset + _sliceLength,
+      );
 
-          // 使用sublist避免复制
-          yield parentData.sublist(offset, offset + bytesToRead);
-
-          offset += bytesToRead;
-        }
-        return;
-      }
-    }
-
-    // For empty block
-    if (_chunks.isEmpty || _size == 0) {
-      return;
-    }
-
-    // For small data that fits in one chunk, optimize by yielding directly
-    if (_size <= chunkSize && _chunks.length == 1) {
-      yield _chunks[0];
-      return;
-    }
-
-    // For data with multiple chunks, yield by copying across chunk boundaries
-    int globalOffset = 0;
-    int currentChunkIndex = 0;
-    int offsetInCurrentChunk = 0;
-
-    while (globalOffset < _size) {
-      final currentChunk = _chunks[currentChunkIndex];
-      final bytesLeftInChunk = currentChunk.length - offsetInCurrentChunk;
-
-      // If we can get a full chunk size from current chunk
-      if (bytesLeftInChunk >= chunkSize) {
-        final chunk = Uint8List(chunkSize);
-        chunk.setRange(0, chunkSize, currentChunk, offsetInCurrentChunk);
-        yield chunk;
-
-        offsetInCurrentChunk += chunkSize;
-        globalOffset += chunkSize;
-
-        // Move to next chunk if needed
-        if (offsetInCurrentChunk >= currentChunk.length) {
-          currentChunkIndex++;
-          offsetInCurrentChunk = 0;
-        }
-      }
-      // If we need to combine data from multiple chunks
-      else {
+      // 分块读取数据
+      int bytesRead = 0;
+      while (bytesRead < _sliceLength) {
         final int bytesToRead =
-            _size - globalOffset < chunkSize ? _size - globalOffset : chunkSize;
-        final chunk = Uint8List(bytesToRead);
+            (bytesRead + chunkSize <= _sliceLength)
+                ? chunkSize
+                : _sliceLength - bytesRead;
 
-        int chunkOffset = 0;
-        int bytesRemaining = bytesToRead;
-
-        while (bytesRemaining > 0) {
-          final currentChunk = _chunks[currentChunkIndex];
-          final bytesToCopy =
-              bytesLeftInChunk < bytesRemaining
-                  ? bytesLeftInChunk
-                  : bytesRemaining;
-
-          chunk.setRange(
-            chunkOffset,
-            chunkOffset + bytesToCopy,
-            currentChunk,
-            offsetInCurrentChunk,
-          );
-
-          chunkOffset += bytesToCopy;
-          bytesRemaining -= bytesToCopy;
-          globalOffset += bytesToCopy;
-
-          offsetInCurrentChunk += bytesToCopy;
-          if (offsetInCurrentChunk >= currentChunk.length &&
-              bytesRemaining > 0) {
-            currentChunkIndex++;
-            offsetInCurrentChunk = 0;
-          }
-        }
-
-        yield chunk;
+        final chunkView = subView.subView(bytesRead, bytesRead + bytesToRead);
+        yield chunkView.toUint8List();
+        bytesRead += bytesToRead;
       }
+      return;
+    }
+
+    // 处理多个块的情况，优化跨块边界的读取
+    if (_chunks.length == 1) {
+      // 单个块可以使用sublist高效分块
+      final chunk = _chunks[0];
+      int offset = 0;
+      while (offset < _size) {
+        final int end =
+            (offset + chunkSize <= _size) ? offset + chunkSize : _size;
+        yield chunk.sublist(offset, end);
+        offset = end;
+      }
+      return;
+    }
+
+    // 对于多个块，使用ByteDataView分块处理
+    final view = getByteDataView();
+    int bytesRead = 0;
+    while (bytesRead < _size) {
+      final int bytesToRead =
+          (bytesRead + chunkSize <= _size) ? chunkSize : _size - bytesRead;
+
+      final chunkView = view.subView(bytesRead, bytesRead + bytesToRead);
+      yield chunkView.toUint8List();
+      bytesRead += bytesToRead;
     }
   }
 

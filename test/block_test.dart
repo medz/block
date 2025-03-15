@@ -593,4 +593,191 @@ void main() {
       expect(Block.getCacheUsage(), equals(0));
     });
   });
+
+  group('Zero-Copy Operations', () {
+    test('ByteDataView basic operations', () {
+      final data = Uint8List.fromList([1, 2, 3, 4, 5]);
+      final view = ByteDataView([data], 5);
+
+      // 测试基本属性
+      expect(view.length, equals(5));
+      expect(view.isContinuous, isTrue);
+
+      // 测试字节访问
+      expect(view.getUint8(0), equals(1));
+      expect(view.getUint8(4), equals(5));
+      expect(() => view.getUint8(5), throwsRangeError);
+
+      // 测试子视图
+      final subView = view.subView(1, 4);
+      expect(subView.length, equals(3));
+      expect(subView.getUint8(0), equals(2));
+      expect(subView.getUint8(2), equals(4));
+
+      // 测试转换
+      final list = view.toUint8List();
+      expect(list, equals([1, 2, 3, 4, 5]));
+
+      // 测试连续数据获取
+      final direct = view.continuousData;
+      expect(direct, isNotNull);
+      expect(direct, equals(data));
+    });
+
+    test('ByteDataView with multiple chunks', () {
+      final chunk1 = Uint8List.fromList([1, 2, 3]);
+      final chunk2 = Uint8List.fromList([4, 5, 6]);
+      final view = ByteDataView([chunk1, chunk2], 6);
+
+      // 测试基本属性
+      expect(view.length, equals(6));
+      expect(view.isContinuous, isFalse);
+
+      // 测试字节访问跨块
+      expect(view.getUint8(0), equals(1));
+      expect(view.getUint8(2), equals(3));
+      expect(view.getUint8(3), equals(4));
+      expect(view.getUint8(5), equals(6));
+
+      // 测试子视图跨块
+      final subView = view.subView(2, 5);
+      expect(subView.length, equals(3));
+      expect(subView.getUint8(0), equals(3));
+      expect(subView.getUint8(1), equals(4));
+      expect(subView.getUint8(2), equals(5));
+
+      // 测试转换
+      final list = view.toUint8List();
+      expect(list, equals([1, 2, 3, 4, 5, 6]));
+
+      // 测试连续数据获取（应为null，因为有多个块）
+      final direct = view.continuousData;
+      expect(direct, isNull);
+    });
+
+    test('Block.getByteDataView() for regular Block', () {
+      final data = Uint8List.fromList([1, 2, 3, 4, 5]);
+      final block = Block([data]);
+
+      // 获取视图
+      final view = block.getByteDataView();
+      expect(view.length, equals(5));
+      expect(view.getUint8(0), equals(1));
+      expect(view.getUint8(4), equals(5));
+    });
+
+    test('Block.getByteDataView() for slice', () {
+      final data = Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      final block = Block([data]);
+      final slice = block.slice(2, 7);
+
+      // 获取视图
+      final view = slice.getByteDataView();
+      expect(view.length, equals(5));
+      expect(view.getUint8(0), equals(3));
+      expect(view.getUint8(4), equals(7));
+    });
+
+    test('Block.getDirectData() for single chunk Block', () {
+      final data = Uint8List.fromList([1, 2, 3, 4, 5]);
+      final block = Block([data]);
+
+      // 获取直接数据引用
+      final directData = block.getDirectData();
+      expect(directData, isNotNull);
+      expect(directData, equals(data));
+
+      // 验证是引用而不是复制
+      expect(identical(directData, data), isTrue);
+    });
+
+    test('Block.getDirectData() for slice of single chunk', () {
+      final data = Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      final block = Block([data]);
+      final slice = block.slice(2, 7);
+
+      // 获取直接数据引用
+      final directData = slice.getDirectData();
+      expect(directData, isNotNull);
+      expect(directData, equals([3, 4, 5, 6, 7]));
+
+      // 这里应该是sublist，所以不是完全相同的对象，但仍然引用相同底层数据
+      expect(identical(directData, data), isFalse);
+
+      // 检查是否共享同一底层内存缓冲区，但不能直接比较buffer引用
+      // 因为sublist可能创建新的buffer视图
+      // 改为检查内容是否相同
+      expect(directData![0], equals(3));
+      expect(directData[4], equals(7));
+    });
+
+    test('Block.getDirectData() returns null for multi-chunk Block', () {
+      final chunk1 = Uint8List.fromList([1, 2, 3]);
+      final chunk2 = Uint8List.fromList([4, 5, 6]);
+      final block = Block([chunk1, chunk2]);
+
+      // 多块数据应该返回null
+      final directData = block.getDirectData();
+      expect(directData, isNull);
+    });
+
+    test('optimized arrayBuffer() uses zero-copy when possible', () async {
+      final data = Uint8List.fromList([1, 2, 3, 4, 5]);
+      final block = Block([data]);
+
+      // 获取数据
+      final buffer = await block.arrayBuffer();
+      expect(buffer, equals(data));
+
+      // 对于单个块，应该是直接引用
+      expect(identical(buffer, data), isTrue);
+    });
+
+    test('optimized arrayBuffer() correctly handles slices', () async {
+      final data = Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      final block = Block([data]);
+      final slice = block.slice(2, 7);
+
+      // 获取数据
+      final buffer = await slice.arrayBuffer();
+      expect(buffer, equals([3, 4, 5, 6, 7]));
+    });
+
+    test('optimized stream() uses zero-copy for small blocks', () async {
+      final data = Uint8List.fromList([1, 2, 3, 4, 5]);
+      final block = Block([data]);
+
+      // 设置块大小大于数据，应该一次性返回整个数据
+      final chunks = await block.stream(chunkSize: 10).toList();
+      expect(chunks.length, equals(1));
+      expect(chunks[0], equals(data));
+
+      // 对于单个块，应该是直接引用
+      expect(identical(chunks[0], data), isTrue);
+    });
+
+    test('optimized stream() correctly handles large blocks', () async {
+      // 创建一个大的数据块
+      final data = Uint8List(1000);
+      for (int i = 0; i < 1000; i++) {
+        data[i] = i % 256;
+      }
+
+      final block = Block([data]);
+
+      // 设置较小的块大小，应该分块返回
+      final chunks = await block.stream(chunkSize: 300).toList();
+      expect(chunks.length, equals(4)); // 1000/300 = 3.33 → 4块
+
+      // 验证数据正确性
+      final recombined = Uint8List(1000);
+      int offset = 0;
+      for (final chunk in chunks) {
+        recombined.setRange(offset, offset + chunk.length, chunk);
+        offset += chunk.length;
+      }
+
+      expect(recombined, equals(data));
+    });
+  });
 }

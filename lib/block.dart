@@ -9,4 +9,4 @@
 /// It's designed to handle binary data efficiently on all platforms.
 library block;
 
-export 'src/block.dart';
+export 'src/block.dart' show Block, ByteDataView, MemoryPressureLevel;
