@@ -462,4 +462,135 @@ void main() {
       Block.triggerMemoryPressure(MemoryPressureLevel.none);
     });
   });
+
+  group('Cache Mechanism', () {
+    setUp(() {
+      // 每个测试前清空缓存
+      Block.clearCache();
+    });
+
+    test('stores and retrieves blocks from cache', () {
+      final data = Uint8List.fromList([1, 2, 3, 4]);
+      final block = Block([data]);
+
+      // 存储块到缓存
+      Block.putToCache('testKey', block);
+
+      // 检查缓存使用量
+      expect(Block.getCacheUsage(), greaterThan(0));
+
+      // 从缓存获取块
+      final cachedBlock = Block.getFromCache('testKey');
+      expect(cachedBlock, isNotNull);
+      expect(cachedBlock!.size, equals(4));
+      expect(cachedBlock.type, equals(''));
+    });
+
+    test('respects cache limits', () {
+      // 设置较小的缓存限制
+      Block.setCacheLimit(1024);
+
+      // 创建一个大的Block
+      final largeData = Uint8List(2048); // 2KB
+      for (int i = 0; i < largeData.length; i++) {
+        largeData[i] = i % 256;
+      }
+
+      final largeBlock = Block([largeData]);
+
+      // 尝试存储到缓存
+      Block.putToCache('largeBlock', largeBlock);
+
+      // 因为超出了缓存限制，应该自动清理
+      expect(Block.getCacheUsage(), lessThanOrEqualTo(1024));
+
+      // 应该无法找到被缓存的大块
+      expect(Block.getFromCache('largeBlock'), isNull);
+    });
+
+    test('cache expiration works', () async {
+      final data = Uint8List.fromList([1, 2, 3, 4]);
+      final block = Block([data]);
+
+      // 设置短的过期时间 (100毫秒)
+      Block.setCacheExpirationTime(100);
+
+      // 存储块到缓存
+      Block.putToCache('expiringBlock', block);
+
+      // 立即应该能找到
+      expect(Block.getFromCache('expiringBlock'), isNotNull);
+
+      // 等待过期
+      await Future.delayed(Duration(milliseconds: 200));
+
+      // 现在应该过期了
+      expect(Block.getFromCache('expiringBlock'), isNull);
+    });
+
+    test('cache priority affects memory pressure behavior', () {
+      // 创建不同优先级的块
+      final lowPriorityBlock = Block([
+        Uint8List.fromList([1, 2, 3]),
+      ]);
+      final mediumPriorityBlock = Block([
+        Uint8List.fromList([4, 5, 6]),
+      ]);
+      final highPriorityBlock = Block([
+        Uint8List.fromList([7, 8, 9]),
+      ]);
+
+      // 缓存它们，设置不同优先级
+      Block.putToCache('lowPriority', lowPriorityBlock, priority: 'low');
+      Block.putToCache(
+        'mediumPriority',
+        mediumPriorityBlock,
+        priority: 'medium',
+      );
+      Block.putToCache('highPriority', highPriorityBlock, priority: 'high');
+
+      // 触发轻度内存压力
+      Block.triggerMemoryPressure(MemoryPressureLevel.low);
+
+      // 低优先级应该被清理，中、高优先级应该保留
+      expect(Block.getFromCache('lowPriority'), isNull);
+      expect(Block.getFromCache('mediumPriority'), isNotNull);
+      expect(Block.getFromCache('highPriority'), isNotNull);
+
+      // 触发中度内存压力
+      Block.triggerMemoryPressure(MemoryPressureLevel.medium);
+
+      // 中优先级应该被清理，高优先级应该保留
+      expect(Block.getFromCache('mediumPriority'), isNull);
+      expect(Block.getFromCache('highPriority'), isNotNull);
+
+      // 触发高度内存压力
+      Block.triggerMemoryPressure(MemoryPressureLevel.high);
+
+      // 所有缓存应该被清理
+      expect(Block.getFromCache('highPriority'), isNull);
+    });
+
+    test('manual cache management works', () {
+      final block = Block([
+        Uint8List.fromList([1, 2, 3, 4]),
+      ]);
+
+      // 存储块到缓存
+      Block.putToCache('manualTest', block);
+      expect(Block.getFromCache('manualTest'), isNotNull);
+
+      // 手动移除
+      Block.removeFromCache('manualTest');
+      expect(Block.getFromCache('manualTest'), isNull);
+
+      // 手动清空缓存
+      Block.putToCache('test1', block);
+      Block.putToCache('test2', block);
+      expect(Block.getCacheUsage(), greaterThan(0));
+
+      Block.clearCache();
+      expect(Block.getCacheUsage(), equals(0));
+    });
+  });
 }

@@ -39,6 +39,271 @@ enum MemoryPressureLevel {
   critical,
 }
 
+/// 缓存项的优先级
+enum _CachePriority {
+  /// 高优先级缓存，仅在高内存压力下清理
+  high,
+
+  /// 中优先级缓存，在中度内存压力下清理
+  medium,
+
+  /// 低优先级缓存，在轻度内存压力下清理
+  low,
+}
+
+/// 缓存项
+class _CacheItem<T> {
+  /// 缓存的数据
+  final T data;
+
+  /// 缓存项的内存占用（字节）
+  final int memoryCost;
+
+  /// 缓存项的优先级
+  final _CachePriority priority;
+
+  /// 最后访问时间
+  DateTime lastAccessed = DateTime.now();
+
+  /// 创建时间
+  final DateTime createdAt = DateTime.now();
+
+  _CacheItem({
+    required this.data,
+    required this.memoryCost,
+    this.priority = _CachePriority.medium,
+  });
+
+  /// 更新最后访问时间
+  void touch() {
+    lastAccessed = DateTime.now();
+  }
+}
+
+/// 缓存池管理类
+class _BlockCache {
+  /// 单例实例
+  static final _BlockCache _instance = _BlockCache._();
+
+  /// 获取单例实例
+  static _BlockCache get instance => _instance;
+
+  /// 私有构造函数
+  _BlockCache._();
+
+  /// 缓存池，按照Key存储缓存项
+  final Map<String, _CacheItem> _cache = {};
+
+  /// 缓存池内存使用总量（字节）
+  int _totalMemoryCost = 0;
+
+  /// 缓存池最大内存限制（字节），默认为10MB
+  int _maxMemoryCost = 10 * 1024 * 1024;
+
+  /// 缓存项过期时间（毫秒），默认为5分钟
+  int _defaultExpirationMs = 5 * 60 * 1000;
+
+  /// 获取缓存池内存使用量
+  int get totalMemoryCost => _totalMemoryCost;
+
+  /// 设置缓存池最大内存限制
+  set maxMemoryCost(int value) {
+    _maxMemoryCost = value;
+    _checkAndCleanCache();
+  }
+
+  /// 获取缓存池最大内存限制
+  int get maxMemoryCost => _maxMemoryCost;
+
+  /// 设置缓存项默认过期时间（毫秒）
+  set defaultExpirationMs(int value) {
+    _defaultExpirationMs = value;
+  }
+
+  /// 从缓存中获取数据
+  T? get<T>(String key) {
+    final item = _cache[key];
+    if (item == null) {
+      return null;
+    }
+
+    // 检查是否过期
+    if (_isExpired(item)) {
+      _removeItem(key);
+      return null;
+    }
+
+    // 更新最后访问时间
+    item.touch();
+    return item.data as T;
+  }
+
+  /// 将数据存入缓存
+  void put<T>({
+    required String key,
+    required T data,
+    required int memoryCost,
+    _CachePriority priority = _CachePriority.medium,
+  }) {
+    // 如果已存在此key，先移除旧数据
+    if (_cache.containsKey(key)) {
+      _removeItem(key);
+    }
+
+    // 如果添加新缓存会超过最大限制，先清理一些旧缓存
+    if (_totalMemoryCost + memoryCost > _maxMemoryCost) {
+      _evictCache(requiredSpace: memoryCost);
+    }
+
+    // 添加新缓存项
+    final item = _CacheItem<T>(
+      data: data,
+      memoryCost: memoryCost,
+      priority: priority,
+    );
+    _cache[key] = item;
+    _totalMemoryCost += memoryCost;
+  }
+
+  /// 从缓存中移除数据
+  void remove(String key) {
+    _removeItem(key);
+  }
+
+  /// 清空所有缓存
+  void clear() {
+    _cache.clear();
+    _totalMemoryCost = 0;
+  }
+
+  /// 检查缓存项是否过期
+  bool _isExpired(_CacheItem item) {
+    final now = DateTime.now();
+    return now.difference(item.lastAccessed).inMilliseconds >
+        _defaultExpirationMs;
+  }
+
+  /// 内部移除缓存项的方法
+  void _removeItem(String key) {
+    final item = _cache.remove(key);
+    if (item != null) {
+      _totalMemoryCost -= item.memoryCost;
+    }
+  }
+
+  /// 根据优先级清理指定内存压力下的缓存
+  int clearByPressureLevel(MemoryPressureLevel level) {
+    int freedBytes = 0;
+
+    switch (level) {
+      case MemoryPressureLevel.low:
+        // 轻度压力：只清理低优先级缓存
+        freedBytes = _clearByPriority(_CachePriority.low);
+        break;
+      case MemoryPressureLevel.medium:
+        // 中度压力：清理低优先级和中优先级缓存
+        freedBytes = _clearByPriority(_CachePriority.low);
+        freedBytes += _clearByPriority(_CachePriority.medium);
+        break;
+      case MemoryPressureLevel.high:
+      case MemoryPressureLevel.critical:
+        // 高压力或危险级别：清理所有缓存
+        freedBytes = _totalMemoryCost;
+        clear();
+        break;
+      case MemoryPressureLevel.none:
+        // 无压力：不清理，只进行常规过期检查
+        freedBytes = _cleanExpiredItems();
+        break;
+    }
+
+    return freedBytes;
+  }
+
+  /// 清理指定优先级的缓存
+  int _clearByPriority(_CachePriority priority) {
+    int freedBytes = 0;
+    final keysToRemove = <String>[];
+
+    _cache.forEach((key, item) {
+      if (item.priority == priority) {
+        freedBytes += item.memoryCost;
+        keysToRemove.add(key);
+      }
+    });
+
+    for (final key in keysToRemove) {
+      _removeItem(key);
+    }
+
+    return freedBytes;
+  }
+
+  /// 清理过期的缓存项
+  int _cleanExpiredItems() {
+    int freedBytes = 0;
+    final keysToRemove = <String>[];
+
+    _cache.forEach((key, item) {
+      if (_isExpired(item)) {
+        freedBytes += item.memoryCost;
+        keysToRemove.add(key);
+      }
+    });
+
+    for (final key in keysToRemove) {
+      _removeItem(key);
+    }
+
+    return freedBytes;
+  }
+
+  /// 腾出指定空间的缓存
+  void _evictCache({required int requiredSpace}) {
+    // 先清理过期缓存
+    _cleanExpiredItems();
+
+    // 如果还不够，按照最后访问时间清理
+    if (_totalMemoryCost + requiredSpace > _maxMemoryCost) {
+      // 按照最后访问时间排序，优先清理最早访问的
+      final sortedItems =
+          _cache.entries.toList()..sort(
+            (a, b) => a.value.lastAccessed.compareTo(b.value.lastAccessed),
+          );
+
+      // 从最早访问的开始移除，直到空间足够
+      for (final entry in sortedItems) {
+        // 不移除高优先级的缓存，除非实在没有空间
+        if (entry.value.priority == _CachePriority.high &&
+            _totalMemoryCost + requiredSpace - entry.value.memoryCost <=
+                _maxMemoryCost) {
+          continue;
+        }
+
+        _removeItem(entry.key);
+
+        // 如果空间已足够，退出循环
+        if (_totalMemoryCost + requiredSpace <= _maxMemoryCost) {
+          break;
+        }
+      }
+    }
+  }
+
+  /// 检查并清理缓存，在内存使用超过限制时调用
+  void _checkAndCleanCache() {
+    if (_totalMemoryCost > _maxMemoryCost) {
+      // 优先清理过期的
+      _cleanExpiredItems();
+
+      // 如果还是超过限制，按照最后访问时间和优先级清理
+      if (_totalMemoryCost > _maxMemoryCost) {
+        _evictCache(requiredSpace: 0);
+      }
+    }
+  }
+}
+
 /// A Block object represents an immutable, raw data file-like object.
 ///
 /// This is a pure Dart implementation inspired by the Web API Blob.
@@ -206,6 +471,9 @@ class Block {
   static void triggerMemoryPressure(MemoryPressureLevel level) {
     _currentPressureLevel = level;
     _notifyMemoryPressureCallbacks(level);
+
+    // 自动响应内存压力
+    _autoReduceMemoryUsage(level);
   }
 
   /// 释放可能的缓存内存，降低内存使用
@@ -232,18 +500,22 @@ class Block {
 
     switch (level) {
       case MemoryPressureLevel.low:
-        // 轻度压力：清理非关键缓存（未来实现）
+        // 轻度压力：清理非关键缓存
+        freedBytes = _BlockCache.instance.clearByPressureLevel(level);
         break;
       case MemoryPressureLevel.medium:
-        // 中度压力：清理所有缓存（未来实现）
+        // 中度压力：清理所有缓存
+        freedBytes = _BlockCache.instance.clearByPressureLevel(level);
         break;
       case MemoryPressureLevel.high:
       case MemoryPressureLevel.critical:
-        // 高压力：强制清理所有可能的内存（未来实现）
-        freedBytes = reduceMemoryUsage();
+        // 高压力：清理所有缓存并强制释放所有可能的内存
+        freedBytes = _BlockCache.instance.clearByPressureLevel(level);
+        freedBytes += reduceMemoryUsage();
         break;
       case MemoryPressureLevel.none:
-        // 无压力：不需要操作
+        // 无压力：只清理过期缓存
+        freedBytes = _BlockCache.instance.clearByPressureLevel(level);
         break;
     }
 
@@ -949,5 +1221,88 @@ class Block {
   /// ```
   static Block empty({String type = ''}) {
     return Block([], type: type);
+  }
+
+  /// 自定义缓存设置
+  ///
+  /// 可设置缓存的最大内存使用限制（字节）
+  ///
+  /// ```dart
+  /// // 设置缓存最大为20MB
+  /// Block.setCacheLimit(20 * 1024 * 1024);
+  /// ```
+  static void setCacheLimit(int maxBytes) {
+    _BlockCache.instance.maxMemoryCost = maxBytes;
+  }
+
+  /// 获取当前缓存使用量（字节）
+  static int getCacheUsage() {
+    return _BlockCache.instance.totalMemoryCost;
+  }
+
+  /// 设置缓存项过期时间（毫秒）
+  ///
+  /// ```dart
+  /// // 设置缓存项过期时间为10分钟
+  /// Block.setCacheExpirationTime(10 * 60 * 1000);
+  /// ```
+  static void setCacheExpirationTime(int milliseconds) {
+    _BlockCache.instance.defaultExpirationMs = milliseconds;
+  }
+
+  /// 清空所有缓存
+  static void clearCache() {
+    _BlockCache.instance.clear();
+  }
+
+  /// 获取缓存的Block
+  ///
+  /// 通过指定的键查找缓存中的Block
+  /// 如果未找到或已过期，返回null
+  static Block? getFromCache(String key) {
+    return _BlockCache.instance.get<Block>(key);
+  }
+
+  /// 存储Block到缓存
+  ///
+  /// [key] 缓存键
+  /// [block] 要缓存的Block
+  /// [priority] 优先级，可选值：'high', 'medium', 'low'，默认为'medium'
+  static void putToCache(
+    String key,
+    Block block, {
+    String priority = 'medium',
+  }) {
+    _CachePriority cachePriority;
+
+    switch (priority.toLowerCase()) {
+      case 'high':
+        cachePriority = _CachePriority.high;
+        break;
+      case 'low':
+        cachePriority = _CachePriority.low;
+        break;
+      case 'medium':
+      default:
+        cachePriority = _CachePriority.medium;
+        break;
+    }
+
+    // 如果Block太大超过缓存限制，直接返回不缓存
+    if (block._memoryCost > _BlockCache.instance.maxMemoryCost) {
+      return;
+    }
+
+    _BlockCache.instance.put<Block>(
+      key: key,
+      data: block,
+      memoryCost: block._memoryCost,
+      priority: cachePriority,
+    );
+  }
+
+  /// 从缓存中移除指定的Block
+  static void removeFromCache(String key) {
+    _BlockCache.instance.remove(key);
   }
 }
