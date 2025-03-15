@@ -96,11 +96,15 @@
 
 ### 性能优化
 
-- [ ] 惰性计算与延迟处理
+- [x] 惰性计算与延迟处理
 
   - [x] size 属性惰性计算
   - [x] 延迟加载策略，仅在需要时加载数据
   - [x] 推迟操作执行到实际需要时
+    - WebKit 的 Blob 实现中使用了 Promise 和异步方式推迟操作执行，如 text()、arrayBuffer()等方法
+    - 我们实现了 DeferredOperation 系统，提供了更灵活的延迟执行机制
+    - 与 WebKit 类似，关键操作如文本解码、数据转换等都被推迟到真正需要结果时执行
+    - 添加了更多功能，如操作链和自定义转换器，使延迟执行更加强大
 
 - [ ] 基准测试与性能分析
 
@@ -164,7 +168,11 @@
    - [x] 实现无复制分片
    - [ ] 减少内存占用
    - [x] 实现惰性计算的 size 属性
-   - [ ] 建立基准测试框架
+   - [x] 建立基准测试框架
+   - [ ] 修复基准测试中内存统计显示为 0 的问题
+     - [ ] 检查并修复内存统计功能
+     - [ ] 确保数据去重功能正确统计内存节省
+     - [ ] 修复 Block 构造函数中对不支持类型的异常处理
 
 2. **Web 平台互操作性**
 
@@ -180,6 +188,14 @@
    - [ ] 完善 API 文档
    - [ ] 添加更多实用示例
    - [ ] 提供性能优化建议
+   - [ ] 修复测试失败问题
+     - [ ] 修复"Block creates from list of parts"测试
+     - [ ] 修复"Block throws on unsupported part types"测试
+     - [ ] 修复"Data Deduplication identical data blocks are stored only once"测试
+     - [ ] 修复"Data Deduplication large data blocks utilize deduplication"测试
+     - [ ] 数据去重功能虽然有代码实现，但可能存在问题，导致没有正确统计内存节省
+     - [ ] 基准测试框架本身工作正常，但是内存统计功能不正常
+     - [ ] Block 类的构造函数在处理某些类型的参数时可能存在问题
 
 ## 长期目标
 
