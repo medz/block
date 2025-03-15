@@ -5,6 +5,8 @@
 
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:async';
+import 'dart:math';
 
 import 'package:block/block.dart';
 import 'package:test/test.dart';
@@ -949,6 +951,53 @@ void main() {
       expect(report['totalRefCount'], isA<int>());
       expect(report['totalSavedMemory'], isA<int>());
       expect(report['duplicateBlockCount'], isA<int>());
+    });
+  });
+
+  group('Lazy Calculation', () {
+    test('size property is lazily calculated', () {
+      // 创建一个带有多个数据块的Block
+      final data1 = Uint8List.fromList([1, 2, 3, 4, 5]);
+      final data2 = Uint8List.fromList([6, 7, 8, 9, 10]);
+      final block = Block([data1, data2]);
+
+      // 检查size属性是否正确计算
+      expect(block.size, equals(10)); // 两个数据块各5字节
+
+      // 创建一个空Block
+      final emptyBlock = Block([]);
+      expect(emptyBlock.size, equals(0));
+
+      // 创建一个切片
+      final slice = block.slice(2, 8);
+      expect(slice.size, equals(6)); // 从索引2到8（不含），应该是6字节
+    });
+
+    test('size property performance', () {
+      // 创建一个大Block测试性能
+      final largeData = Uint8List(1000000); // 1MB数据
+      for (int i = 0; i < largeData.length; i++) {
+        largeData[i] = i % 256;
+      }
+
+      final block = Block([largeData]);
+
+      // 第一次访问size应该计算值
+      final stopwatch = Stopwatch()..start();
+      final size1 = block.size;
+      final firstAccessTime = stopwatch.elapsedMicroseconds;
+      stopwatch.reset();
+
+      // 第二次访问应该使用缓存值，速度更快
+      final size2 = block.size;
+      final secondAccessTime = stopwatch.elapsedMicroseconds;
+
+      expect(size1, equals(1000000));
+      expect(size2, equals(1000000));
+
+      // 缓存过的访问应该几乎瞬时完成，但要考虑到测试环境的不稳定因素
+      // 我们只是确保它比第一次显著快就行，而不比较具体的时间
+      expect(secondAccessTime, lessThan(firstAccessTime));
     });
   });
 }

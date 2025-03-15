@@ -739,8 +739,10 @@ class Block {
   /// The internal storage of data chunks
   final List<Uint8List> _chunks;
 
-  /// Total size of all chunks in bytes
-  final int _size;
+  /// The data size in bytes.
+  ///
+  /// This is lazily calculated when first accessed and then cached.
+  int? _size;
 
   /// The MIME type of the Block
   final String _type;
@@ -784,7 +786,7 @@ class Block {
   /// ```
   Map<String, dynamic> getMemoryReport() {
     return {
-      'size': _size,
+      'size': size,
       'memoryCost': _memoryCost,
       'isSlice': _parent != null,
       'hasMultipleChunks': _chunks.length > 1,
@@ -1093,7 +1095,6 @@ class Block {
   /// ```
   Block(List<dynamic> parts, {String type = ''})
     : _chunks = _createBlockChunks(parts),
-      _size = _calculateTotalSize(parts),
       _type = type,
       _parent = null,
       _startOffset = 0,
@@ -1109,17 +1110,16 @@ class Block {
     this._sliceLength, {
     required String type,
   }) : _chunks = [],
-       _size = _sliceLength,
        _type = type,
        _memoryCost = _calculateSliceMemoryCost(_sliceLength) {
     _registerMemoryUsage();
   }
 
   /// Internal constructor for creating Block from explicit chunks
-  Block._fromChunks(this._chunks, this._size, this._type)
+  Block._fromChunks(this._chunks, int totalSize, this._type)
     : _parent = null,
       _startOffset = 0,
-      _sliceLength = _size,
+      _sliceLength = totalSize,
       _memoryCost = _calculateChunksMemoryCost(_chunks) {
     _registerMemoryUsage();
   }
@@ -1374,7 +1374,28 @@ class Block {
   }
 
   /// Returns the size of the Block in bytes.
-  int get size => _size;
+  ///
+  /// The size is lazily calculated when first accessed and then cached.
+  int get size {
+    // 如果已经计算过，直接返回缓存的结果
+    if (_size != null) {
+      return _size!;
+    }
+
+    // 首次访问时计算size
+    if (_parent != null) {
+      // 对于切片，直接使用切片长度
+      _size = _sliceLength;
+    } else if (_chunks.isEmpty) {
+      // 空Block的情况
+      _size = 0;
+    } else {
+      // 计算所有数据块的总长度
+      _size = _chunks.fold<int>(0, (sum, chunk) => sum + chunk.length);
+    }
+
+    return _size!;
+  }
 
   /// Returns the MIME type of the Block.
   String get type => _type;
@@ -1393,7 +1414,7 @@ class Block {
   /// ```
   Block slice(int start, [int? end, String? contentType]) {
     // Handle negative indices
-    final int dataSize = _size;
+    final int dataSize = size;
 
     if (start < 0) start = dataSize + start;
     final int normalizedEnd =
@@ -1485,7 +1506,7 @@ class Block {
       return parentView.subView(_startOffset, _startOffset + _sliceLength);
     }
 
-    return ByteDataView(_chunks, _size);
+    return ByteDataView(_chunks, size);
   }
 
   /// 尝试获取底层数据的直接引用，而不需要复制数据
@@ -1508,7 +1529,7 @@ class Block {
   /// ```
   Uint8List? getDirectData() {
     // 如果是单个连续块，直接返回
-    if (_parent == null && _chunks.length == 1 && _chunks[0].length == _size) {
+    if (_parent == null && _chunks.length == 1 && _chunks[0].length == size) {
       return _chunks[0];
     }
 
@@ -1567,7 +1588,7 @@ class Block {
   /// ```
   Stream<Uint8List> stream({int chunkSize = 1024 * 64}) async* {
     // 如果Block很小，直接返回整个数据
-    if (_size <= chunkSize) {
+    if (size <= chunkSize) {
       // 尝试零拷贝方式获取数据
       final directData = getDirectData();
       if (directData != null) {
@@ -1604,11 +1625,9 @@ class Block {
 
       // 分块读取数据
       int bytesRead = 0;
-      while (bytesRead < _sliceLength) {
+      while (bytesRead < size) {
         final int bytesToRead =
-            (bytesRead + chunkSize <= _sliceLength)
-                ? chunkSize
-                : _sliceLength - bytesRead;
+            (bytesRead + chunkSize <= size) ? chunkSize : size - bytesRead;
 
         final chunkView = subView.subView(bytesRead, bytesRead + bytesToRead);
         yield chunkView.toUint8List();
@@ -1622,9 +1641,9 @@ class Block {
       // 单个块可以使用sublist高效分块
       final chunk = _chunks[0];
       int offset = 0;
-      while (offset < _size) {
+      while (offset < size) {
         final int end =
-            (offset + chunkSize <= _size) ? offset + chunkSize : _size;
+            (offset + chunkSize <= size) ? offset + chunkSize : size;
         yield chunk.sublist(offset, end);
         offset = end;
       }
@@ -1634,9 +1653,9 @@ class Block {
     // 对于多个块，使用ByteDataView分块处理
     final view = getByteDataView();
     int bytesRead = 0;
-    while (bytesRead < _size) {
+    while (bytesRead < size) {
       final int bytesToRead =
-          (bytesRead + chunkSize <= _size) ? chunkSize : _size - bytesRead;
+          (bytesRead + chunkSize <= size) ? chunkSize : size - bytesRead;
 
       final chunkView = view.subView(bytesRead, bytesRead + bytesToRead);
       yield chunkView.toUint8List();
