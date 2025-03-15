@@ -3,17 +3,17 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-/// A dart library for efficiently handling binary data across platforms.
-///
-/// The Block library provides a pure Dart implementation of a Blob-like API.
-/// It's designed to handle binary data efficiently on all platforms.
+/// Block库提供了高效的二进制数据处理功能，类似于Web API中的Blob。
+/// 
+/// 主要特性:
+/// - 高效的内存管理和数据分片
+/// - 数据去重以优化内存使用
+/// - 流式数据处理
+/// - 异步API支持
+/// - 零拷贝数据访问
 library block;
 
-export 'src/block.dart' show Block, ByteDataView, MemoryPressureLevel;
-export 'src/deferred_operation.dart'
-    show
-        DeferredOperation,
-        DeferredOperations,
-        DeferredTextDecoding,
-        DeferredBlockMerge,
-        DeferredDataTransformation;
+export 'src/block.dart';
+export 'src/deferred_operation.dart';
+export 'src/memory_manager.dart';
+export 'src/disposable_block.dart';

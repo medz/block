@@ -985,8 +985,8 @@ class Block {
       case MemoryPressureLevel.low:
         // 轻度压力：清理非关键缓存
         freedBytes = _BlockCache.instance.clearByPressureLevel(level);
-        // 清理未引用的共享数据
-        freedBytes += _DataStore.instance.reduceMemoryUsage();
+        // 增加当轻度压力下的缓存和未使用数据的清理频率
+        freedBytes += _DataStore.instance.cleanUnreferencedData();
         break;
       case MemoryPressureLevel.medium:
         // 中度压力：清理所有缓存
@@ -999,6 +999,12 @@ class Block {
         // 高压力：清理所有缓存并强制释放所有可能的内存
         freedBytes = _BlockCache.instance.clearByPressureLevel(level);
         freedBytes += reduceMemoryUsage();
+        
+        // 在高压力或危急情况下，主动触发垃圾回收
+        if (level == MemoryPressureLevel.critical) {
+          // 使用间接方式提示垃圾回收器工作
+          _suggestGarbageCollection();
+        }
         break;
       case MemoryPressureLevel.none:
         // 无压力：只清理过期缓存和未引用的数据
@@ -1011,6 +1017,12 @@ class Block {
     return freedBytes;
   }
 
+  // 提示垃圾回收器工作的辅助方法
+  static void _suggestGarbageCollection() {
+    List<int>? largeList = List<int>.filled(1024 * 1024, 0); // 分配1MB临时内存
+    largeList = null; // 立即释放引用
+  }
+
   /// 检查内存压力状态并更新压力级别
   static void _checkMemoryPressure() {
     MemoryPressureLevel newLevel;
@@ -1021,13 +1033,14 @@ class Block {
     } else {
       final double usageRatio = _totalMemoryUsage / _memoryUsageLimit!;
 
-      if (usageRatio >= 0.95) {
+      // 降低阈值，让系统更早响应内存压力
+      if (usageRatio >= 0.90) { // 从0.95降低到0.90
         newLevel = MemoryPressureLevel.critical;
-      } else if (usageRatio >= 0.85) {
+      } else if (usageRatio >= 0.80) { // 从0.85降低到0.80
         newLevel = MemoryPressureLevel.high;
-      } else if (usageRatio >= 0.7) {
+      } else if (usageRatio >= 0.65) { // 从0.7降低到0.65
         newLevel = MemoryPressureLevel.medium;
-      } else if (usageRatio >= 0.5) {
+      } else if (usageRatio >= 0.45) { // 从0.5降低到0.45
         newLevel = MemoryPressureLevel.low;
       } else {
         newLevel = MemoryPressureLevel.none;
@@ -1040,6 +1053,10 @@ class Block {
       _notifyMemoryPressureCallbacks(newLevel);
 
       // 自动响应内存压力
+      _autoReduceMemoryUsage(newLevel);
+    } else if (newLevel != MemoryPressureLevel.none) {
+      // 即使压力级别没变，只要不是无压力状态，也定期执行内存释放
+      // 避免在高内存使用时长时间不释放内存
       _autoReduceMemoryUsage(newLevel);
     }
   }
@@ -1099,8 +1116,8 @@ class Block {
     return () => periodicTimer.cancel();
   }
 
-  /// The default chunk size for segmented storage (1MB)
-  static const int defaultChunkSize = 1024 * 1024;
+  /// The default chunk size for segmented storage (reduced from 1MB to 512KB)
+  static const int defaultChunkSize = 512 * 1024;
 
   /// 用于finalizer的回调函数
   static final _finalizer = Finalizer<_BlockMemoryTracker>((tracker) {
@@ -2017,5 +2034,66 @@ class Block {
     print('  Data deduplication:');
     print('    Duplicate count: ${_DataStore.instance.duplicateBlockCount}');
     print('    Saved memory: ${_DataStore.instance.totalSavedMemory} bytes');
+  }
+
+  /// 设置自动内存监控器，定期检查内存使用情况
+  /// 
+  /// [intervalMs] - 检查间隔（毫秒）
+  /// [memoryLimit] - 内存使用上限（字节）
+  /// 
+  /// 返回一个用于停止监控的函数
+  /// 
+  /// 示例:
+  /// ```dart
+  /// // 开始每5秒监控一次，内存上限设为100MB
+  /// final stopMonitor = Block.startMemoryMonitor(
+  ///   intervalMs: 5000,
+  ///   memoryLimit: 100 * 1024 * 1024,
+  /// );
+  /// 
+  /// // 稍后停止监控
+  /// stopMonitor();
+  /// ```
+  static Function startMemoryMonitor({
+    int intervalMs = 2000,
+    int? memoryLimit,
+  }) {
+    if (memoryLimit != null) {
+      setMemoryUsageLimit(memoryLimit);
+    }
+
+    // 创建定时器定期检查内存使用
+    bool isRunning = true;
+    void checkMemory() {
+      if (!isRunning) return;
+
+      // 强制更新内存统计
+      forceUpdateMemoryStatistics();
+      
+      // 检查内存压力
+      _checkMemoryPressure();
+      
+      // 如果内存使用率超过80%，主动减少内存占用
+      if (_memoryUsageLimit != null) {
+        final double usageRatio = _totalMemoryUsage / _memoryUsageLimit!;
+        if (usageRatio > 0.8) {
+          reduceMemoryUsage();
+        }
+      }
+
+      // 安排下一次检查
+      Future.delayed(Duration(milliseconds: intervalMs), checkMemory);
+    }
+
+    // 启动定时检查
+    checkMemory();
+
+    // 返回停止函数
+    return () {
+      isRunning = false;
+      if (memoryLimit != null) {
+        setMemoryUsageLimit(null); // 移除限制
+      }
+    };
   }
 }

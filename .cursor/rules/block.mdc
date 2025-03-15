@@ -14,6 +14,9 @@ alwaysApply: true
 ## 参考资料
 
 @file webkit-blob-analysis.md
+[webkit-blob-analysis.md](mdc:webkit-blob-analysis.md)
+
+@file memory_analysis_report.md
 
 我们已经完成了基本的 WebKit 中针对 Blob 实现的一下分析。你应该参考它。你工作中应该遵循：
 
@@ -30,6 +33,7 @@ alwaysApply: true
 ## TODOs
 
 @file todos.md
+[todos.md](mdc:todos.md)
 
 我们将接下来要完成的事情和已经完成的事情记录在 TODOs 文件中以便了解基本情况。
 同时，它也是你的记忆库文件之一；它有个特殊之处，就是每当你完成了一项工作，你需要记录它。你需要遵循以下规则：

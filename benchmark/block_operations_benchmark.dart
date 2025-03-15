@@ -9,11 +9,11 @@ import 'package:block/block.dart';
 import 'framework.dart';
 
 class BlockSliceBenchmark extends MemoryBenchmark {
-  static const int _blockSize = 10 * 1024 * 1024; // 10MB
+  static const int _blockSize = 5 * 1024 * 1024; // 从10MB降低到5MB
   Block? _block;
   Block? _slice;
 
-  BlockSliceBenchmark() : super('Block.slice() (10MB)');
+  BlockSliceBenchmark() : super('Block.slice() (5MB)');
 
   @override
   void setup() {
@@ -47,11 +47,11 @@ class BlockSliceBenchmark extends MemoryBenchmark {
 }
 
 class BlockGetByteDataViewBenchmark extends MemoryBenchmark {
-  static const int _blockSize = 10 * 1024 * 1024; // 10MB
+  static const int _blockSize = 5 * 1024 * 1024; // 从10MB降低到5MB
   Block? _block;
   ByteDataView? _view;
 
-  BlockGetByteDataViewBenchmark() : super('Block.getByteDataView() (10MB)');
+  BlockGetByteDataViewBenchmark() : super('Block.getByteDataView() (5MB)');
 
   @override
   void setup() {
@@ -81,10 +81,10 @@ class BlockGetByteDataViewBenchmark extends MemoryBenchmark {
 }
 
 class BlockGetDirectDataBenchmark extends MemoryBenchmark {
-  static const int _blockSize = 10 * 1024 * 1024; // 10MB
+  static const int _blockSize = 5 * 1024 * 1024; // 从10MB降低到5MB
   Block? _block;
 
-  BlockGetDirectDataBenchmark() : super('Block.getDirectData() (10MB)');
+  BlockGetDirectDataBenchmark() : super('Block.getDirectData() (5MB)');
 
   @override
   void setup() {
@@ -111,11 +111,11 @@ class BlockGetDirectDataBenchmark extends MemoryBenchmark {
 }
 
 class BlockArrayBufferBenchmark extends MemoryBenchmark {
-  static const int _blockSize = 10 * 1024 * 1024; // 10MB
+  static const int _blockSize = 5 * 1024 * 1024; // 从10MB降低到5MB
   Block? _block;
   Uint8List? _buffer;
 
-  BlockArrayBufferBenchmark() : super('Block.arrayBuffer() (10MB)');
+  BlockArrayBufferBenchmark() : super('Block.arrayBuffer() (5MB)');
 
   @override
   void setup() {

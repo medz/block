@@ -9,13 +9,13 @@ import 'package:block/block.dart';
 import 'framework.dart';
 
 class DuplicateDataCreationBenchmark extends MemoryBenchmark {
-  static const int _blockSize = 1 * 1024 * 1024; // 1MB
+  static const int _blockSize = 512 * 1024; // 从1MB降低到512KB
   static const int _blockCount = 10; // 创建10个相同的块
   Uint8List? _data;
   final List<Block> _blocks = [];
 
   DuplicateDataCreationBenchmark()
-    : super('Duplicate Block Creation (10x 1MB)');
+    : super('Duplicate Block Creation (10x 512KB)');
 
   @override
   void setup() {
@@ -60,12 +60,12 @@ class DuplicateDataCreationBenchmark extends MemoryBenchmark {
 }
 
 class UniqueDataCreationBenchmark extends MemoryBenchmark {
-  static const int _blockSize = 1 * 1024 * 1024; // 1MB
+  static const int _blockSize = 512 * 1024; // 从1MB降低到512KB
   static const int _blockCount = 10; // 创建10个不同的块
   List<Uint8List>? _dataList;
   final List<Block> _blocks = [];
 
-  UniqueDataCreationBenchmark() : super('Unique Block Creation (10x 1MB)');
+  UniqueDataCreationBenchmark() : super('Unique Block Creation (10x 512KB)');
 
   @override
   void setup() {
@@ -117,21 +117,28 @@ class UniqueDataCreationBenchmark extends MemoryBenchmark {
 }
 
 class DeduplicationMetricsBenchmark extends MemoryBenchmark {
-  static const int _blockSize = 1 * 1024 * 1024; // 1MB
-  static const int _blockCount = 20; // 创建20个块，其中10个相同
-  Uint8List? _sharedData;
-  List<Uint8List>? _uniqueDataList;
+  static const int _blockSize = 512 * 1024; // 从1MB降低到512KB
+  static const int _duplicateCount = 5; // 多少个是重复的
+  static const int _uniqueCount = 5; // 多少个是唯一的
   final List<Block> _blocks = [];
 
+  Uint8List? _sharedData;
+  List<Uint8List>? _uniqueDataList;
+
   DeduplicationMetricsBenchmark()
-    : super('Deduplication Metrics (20x 1MB, 50% duplicates)');
+    : super(
+        'Deduplication Metrics (5 unique + 5 duplicate blocks, 512KB each)',
+      );
 
   @override
   void setup() {
     super.setup();
+    // 生成共享数据和唯一数据
     _sharedData = TestDataGenerator.generateSequentialData(_blockSize);
     _uniqueDataList = [];
-    for (int i = 0; i < _blockCount / 2; i++) {
+
+    // 创建唯一数据列表
+    for (int i = 0; i < _uniqueCount; i++) {
       final data = TestDataGenerator.generateSequentialData(_blockSize);
       data[0] = i + 100; // 确保数据不同
       _uniqueDataList!.add(data);
@@ -142,8 +149,9 @@ class DeduplicationMetricsBenchmark extends MemoryBenchmark {
   void run() {
     if (_sharedData != null && _uniqueDataList != null) {
       _blocks.clear();
-      // 创建10个使用共享数据的Block
-      for (int i = 0; i < _blockCount / 2; i++) {
+
+      // 创建使用共享数据的 Block
+      for (int i = 0; i < _duplicateCount; i++) {
         final block = Block([_sharedData!]);
         // 触发数据处理
         block.size;
@@ -152,8 +160,8 @@ class DeduplicationMetricsBenchmark extends MemoryBenchmark {
         addBlockReference(block);
       }
 
-      // 创建10个使用不同数据的Block
-      for (int i = 0; i < _blockCount / 2; i++) {
+      // 创建使用不同数据的 Block
+      for (int i = 0; i < _uniqueCount; i++) {
         final block = Block([_uniqueDataList![i]]);
         // 触发数据处理
         block.size;

@@ -17,7 +17,7 @@ abstract class MemoryBenchmark extends BenchmarkBase {
   final List<Block> _benchmarkBlocks = [];
 
   /// 创建内存基准测试
-  MemoryBenchmark(String name) : super(name);
+  MemoryBenchmark(super.name);
 
   @override
   void setup() {
@@ -152,13 +152,67 @@ void printBenchmarkResultsTable(List<BenchmarkBase> benchmarks) {
   }
 }
 
-/// 运行所有基准测试并生成报告
+/// 运行所有基准测试
 void runAllBenchmarks(List<BenchmarkBase> benchmarks) {
+  print('=== 运行基准测试 ===');
+  print('');
+
+  // 设置内存使用限制，让系统更早地响应内存压力
+  // 默认设置为256MB，可以根据实际情况调整
+  Block.setMemoryUsageLimit(256 * 1024 * 1024);
+  
+  // 启动内存监控，每1秒检查一次内存使用情况
+  final stopMonitor = Block.startMemoryMonitor(
+    intervalMs: 1000,
+    memoryLimit: 256 * 1024 * 1024,
+  );
+  
+  // 订阅高内存压力通知
+  final cancelHighPressure = Block.onMemoryPressureLevel(() {
+    print('\n警告: 检测到高内存压力');
+    print('当前内存使用: ${Block.totalMemoryUsage ~/ (1024 * 1024)}MB');
+    print('正在自动清理内存...\n');
+  }, level: MemoryPressureLevel.high);
+
+  // 订阅危机内存压力通知
+  final cancelCriticalPressure = Block.onMemoryPressureLevel(() {
+    print('\n警告: 检测到危急内存压力！');
+    print('当前内存使用: ${Block.totalMemoryUsage ~/ (1024 * 1024)}MB');
+    print('进行紧急内存清理...\n');
+    // 强制清理内存
+    final freedBytes = Block.reduceMemoryUsage();
+    print('已释放 ${freedBytes ~/ 1024}KB 内存\n');
+  }, level: MemoryPressureLevel.critical);
+
+  // 运行所有基准测试
   for (final benchmark in benchmarks) {
     benchmark.report();
-    print('-' * 50);
   }
 
-  print('\n性能测试结果总表:');
+  // 运行完成后，打印基准测试结果表格
   printBenchmarkResultsTable(benchmarks);
+
+  // 打印内存使用统计
+  final memReport = Block.getGlobalMemoryReport();
+  print('\n内存使用统计:');
+  print('总内存使用: ${memReport['totalMemoryUsage'] ~/ 1024} KB');
+  print('活跃Block数量: ${memReport['activeBlockCount']}');
+  print('平均每个Block内存: ${memReport['averageBlockMemory'] ~/ 1024} KB');
+  
+  // 打印数据去重统计
+  final dedupeReport = Block.getDataDeduplicationReport();
+  print('\n数据去重统计:');
+  print('唯一Block数量: ${dedupeReport['uniqueBlockCount']}');
+  print('总字节数: ${dedupeReport['totalBytes'] ~/ 1024} KB');
+  print('总引用计数: ${dedupeReport['totalRefCount']}');
+  print('重复Block数量: ${dedupeReport['duplicateBlockCount']}');
+  print('总节省内存: ${dedupeReport['totalSavedMemory'] ~/ 1024} KB');
+
+  // 清理内存压力订阅和监控器
+  cancelHighPressure();
+  cancelCriticalPressure();
+  stopMonitor();
+  
+  // 移除内存限制
+  Block.setMemoryUsageLimit(null);
 }
