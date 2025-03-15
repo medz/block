@@ -83,14 +83,16 @@ final text = await block.text();
 Extract sub-ranges of data without copying the entire block:
 
 ```dart
-// Get bytes 5-9 (inclusive of 5, exclusive of 10)
+// Get bytes from index 5 to 9 (inclusive of 5, exclusive of 10)
 final slice = block.slice(5, 10);
 
 // Omit end index to slice to the end
 final toEnd = block.slice(5);
 
 // Use negative indices to count from the end
+// For a block of size 10, this gets the last 5 bytes (indices 5-9)
 final lastFive = block.slice(-5);
+// For a block of size 10, this gets bytes from index 0 to index 7 (exclusive)
 final exceptLastTwo = block.slice(0, -2);
 ```
 
@@ -107,20 +109,32 @@ Future<void> processLargeFile(String path) async {
   // Create a block from the file's content
   final block = Block.fromStream(file.openRead(), fileSize);
 
+  // ⚠️ Important: When using Block.fromStream, be aware that the underlying
+  // stream will be consumed when first accessed. For non-broadcast streams
+  // (like file streams), this means you can only access the data once
+  // unless it has been cached.
+
+  // It's recommended to fully read the block once before creating slices
+  // or cache the block's bytes if you'll need multiple access points:
+  final fullBytes = await block.bytes(); // This caches the entire content
+
   // Process the first 1MB
   final header = block.slice(0, 1024 * 1024);
   final headerText = await header.text();
   print('File header: $headerText');
 
-  // Process the file in chunks of 10MB
+  // Now you can safely process the file in chunks
   final chunkSize = 10 * 1024 * 1024;
-  for (int i = 0; i < fileSize; i += chunkSize) {
-    final end = (i + chunkSize < fileSize) ? i + chunkSize : fileSize;
-    final chunk = block.slice(i, end);
+  final chunksCount = (fileSize / chunkSize).ceil();
 
-    // Process each chunk
+  for (int i = 0; i < chunksCount; i++) {
+    final start = i * chunkSize;
+    final end = (start + chunkSize) > fileSize ? fileSize : start + chunkSize;
+
+    // These slices are safe to use because the full content is already cached
+    final chunk = block.slice(start, end);
     final chunkBytes = await chunk.bytes();
-    print('Processed chunk ${i ~/ chunkSize + 1}: ${chunkBytes.length} bytes');
+    print('Processed chunk ${i + 1}/$chunksCount: ${chunkBytes.length} bytes');
   }
 }
 ```
@@ -131,6 +145,7 @@ Future<void> processLargeFile(String path) async {
 - The `bytes()` and `text()` methods cache their results for subsequent calls
 - Slicing operations don't copy data until the slice content is actually accessed
 - For blocks larger than 10MB, special handling is used to optimize memory usage
+- Stream-based blocks cache the stream content after first access, allowing multiple slices to be created efficiently
 
 ## Stream-Based Blocks
 

@@ -377,22 +377,38 @@ class _EmptyBlock with Block {
 }
 
 class _StreamBlock with Block {
-  const _StreamBlock(this.source, this.size);
+  _StreamBlock(this.source, this.size);
 
   final Stream<Uint8List> source;
 
   @override
   final int size;
 
+  // 缓存流数据
+  final _cache = <Uint8List>[];
+  bool _isStreamConsumed = false;
+
   @override
   Stream<Uint8List> stream() async* {
+    // 如果已经缓存了数据，直接从缓存返回
+    if (_isStreamConsumed) {
+      yield* Stream.fromIterable(_cache);
+      return;
+    }
+
+    // 首次访问时，消费原始流并缓存数据
     int total = 0;
     await for (final chunk in source) {
+      _cache.add(chunk);
       total += chunk.lengthInBytes;
       yield chunk;
     }
 
+    _isStreamConsumed = true;
+
     if (total != size) {
+      // 清空缓存，因为数据不匹配
+      _cache.clear();
       throw StateError('Stream size mismatch: expected $size, got $total');
     }
   }

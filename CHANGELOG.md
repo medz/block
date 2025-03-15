@@ -1,3 +1,18 @@
+## 0.0.4
+
+_Unreleased_
+
+### Bug Fixes
+
+- Fixed issue with Stream-based blocks when creating multiple slices
+- Added caching mechanism to `_StreamBlock` to support multiple accesses to non-broadcast streams
+- Updated documentation with best practices for handling large files with streams
+
+### Improvements
+
+- Added comprehensive tests for stream caching functionality
+- Enhanced README examples for processing large files
+
 ## 0.0.3
 
 _Released: 2025-03-03_

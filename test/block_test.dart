@@ -400,5 +400,142 @@ void main() {
       final bytes = await block.bytes();
       expect(bytes, equals([1, 2, 3, 4, 5]));
     });
+
+    test('Multiple stream accesses with cached data', () async {
+      final chunks = <Uint8List>[
+        Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+      ];
+      final stream = Stream.fromIterable(chunks);
+
+      final block = Block.fromStream(stream, 10);
+
+      // 第一次访问 stream 应该成功
+      final allChunks = await block.stream().toList();
+      expect(allChunks.length, equals(1));
+      expect(allChunks[0], equals([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
+
+      // 第二次访问 stream 应该也成功（因为已缓存）
+      final allChunks2 = await block.stream().toList();
+      expect(allChunks2.length, equals(1));
+      expect(allChunks2[0], equals([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]));
+    });
+
+    test('Working with multiple slices from a stream-based block', () async {
+      final chunks = <Uint8List>[
+        Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+      ];
+      final stream = Stream.fromIterable(chunks);
+
+      final block = Block.fromStream(stream, 10);
+
+      // 创建多个不同的slice
+      final slice1 = block.slice(0, 3); // [1, 2, 3]
+      final slice2 = block.slice(3, 7); // [4, 5, 6, 7]
+      final slice3 = block.slice(7, 10); // [8, 9, 10]
+
+      // 以相反顺序访问slices（先访问后创建的）
+      final bytes3 = await slice3.bytes();
+      expect(bytes3, equals([8, 9, 10]));
+
+      final bytes2 = await slice2.bytes();
+      expect(bytes2, equals([4, 5, 6, 7]));
+
+      final bytes1 = await slice1.bytes();
+      expect(bytes1, equals([1, 2, 3]));
+    });
+
+    test('Simulating large file processing with multiple slices', () async {
+      // 创建一个较大的数据块，模拟文件
+      final data = Uint8List(100);
+      for (int i = 0; i < 100; i++) {
+        data[i] = i;
+      }
+
+      // 使用广播流以允许多次订阅
+      final stream = Stream.value(data).asBroadcastStream();
+      final block = Block.fromStream(stream, 100);
+
+      // 首先调用一次stream()或bytes()来触发缓存
+      await block.bytes();
+
+      // 创建多个slice
+      final chunks = <Block>[];
+      final chunkSize = 20;
+
+      for (int i = 0; i < 5; i++) {
+        chunks.add(block.slice(i * chunkSize, (i + 1) * chunkSize));
+      }
+
+      // 依次访问每个slice，验证是否能正确获取数据
+      for (int i = 0; i < 5; i++) {
+        final chunkBytes = await chunks[i].bytes();
+        expect(chunkBytes.length, equals(20));
+
+        // 验证数据内容正确
+        for (int j = 0; j < 20; j++) {
+          expect(chunkBytes[j], equals(i * 20 + j));
+        }
+      }
+    });
+
+    test('Simulating the README large file processing example', () async {
+      // 创建模拟文件内容 - 1000字节的数据
+      final fileData = Uint8List(1000);
+      for (int i = 0; i < 1000; i++) {
+        fileData[i] = (i % 256).toInt(); // 简单模式，0-255循环
+      }
+
+      // 模拟文件流 - 用非广播流模拟真实文件读取
+      final fileStream = Stream.value(fileData);
+      final fileSize = fileData.length;
+
+      // 创建stream-based Block，如README例子
+      final block = Block.fromStream(fileStream, fileSize);
+
+      // 按README建议，首先读取整个内容以触发缓存
+      final fullBytes = await block.bytes();
+      expect(fullBytes.length, equals(fileSize));
+
+      // 获取前10个字节作为"header"
+      final header = block.slice(0, 10);
+      final headerBytes = await header.bytes();
+      expect(headerBytes, equals([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]));
+
+      // 处理不同块
+      final chunkSize = 100; // 每块100字节
+      final chunksCount = (fileSize / chunkSize).ceil();
+
+      // 创建所有切片
+      final allChunks = <Block>[];
+      for (int i = 0; i < chunksCount; i++) {
+        final start = i * chunkSize;
+        final end =
+            (start + chunkSize) > fileSize ? fileSize : start + chunkSize;
+        allChunks.add(block.slice(start, end));
+      }
+
+      // 验证所有切片
+      int processedBytes = 0;
+      for (int i = 0; i < chunksCount; i++) {
+        final chunkBytes = await allChunks[i].bytes();
+
+        // 验证每个块的大小
+        final expectedSize =
+            (i == chunksCount - 1 && fileSize % chunkSize != 0)
+                ? fileSize % chunkSize
+                : chunkSize;
+        expect(chunkBytes.length, equals(expectedSize));
+
+        // 验证内容正确
+        for (int j = 0; j < chunkBytes.length; j++) {
+          expect(chunkBytes[j], equals(((i * chunkSize) + j) % 256));
+        }
+
+        processedBytes += chunkBytes.length;
+      }
+
+      // 确认处理了所有字节
+      expect(processedBytes, equals(fileSize));
+    });
   });
 }
