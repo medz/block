@@ -17,6 +17,7 @@ alwaysApply: true
 [webkit-blob-analysis.md](mdc:webkit-blob-analysis.md)
 
 @file memory_analysis_report.md
+[memory_analysis_report.md](mdc:memory_analysis_report.md)
 
 我们已经完成了基本的 WebKit 中针对 Blob 实现的一下分析。你应该参考它。你工作中应该遵循：
 

@@ -221,17 +221,3 @@ class MemoryManager {
     return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 }
-
-/// A simple weak reference implementation
-class WeakReference<T> {
-  final Expando _expando = Expando();
-  final Object _key = Object();
-
-  WeakReference(T target) {
-    _expando[_key] = target;
-  }
-
-  bool get isValid => _expando[_key] != null;
-
-  T? get target => isValid ? _expando[_key] as T? : null;
-}

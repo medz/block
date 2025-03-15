@@ -43,6 +43,7 @@
   - [x] 实现 DisposableBlock 类提供显式内存释放机制
   - [x] 基于弱引用的块跟踪系统
   - [x] LRU 清理策略
+  - [x] 使用 Dart 原生 WeakReference 替代自定义实现
 - [x] 高效数据存储策略
   - [x] 为大型数据实现分段内存管理
   - [x] 优化内存布局减少碎片
@@ -113,7 +114,7 @@
 
 1. **重构 MemoryManager**
 
-   - [ ] 使用 Dart 原生 WeakReference 替代自定义实现
+   - [x] 使用 Dart 原生 WeakReference 替代自定义实现
    - [ ] 应用 Finalizer 在对象被回收时执行清理操作
    - [ ] 更新内存管理代码以优化引用跟踪
    - [ ] 改进 \_DataStore 实现，更准确地追踪数据块引用
