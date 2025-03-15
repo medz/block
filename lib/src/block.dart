@@ -18,6 +18,7 @@ import 'dart:typed_data';
 
 import 'block_memory_tracker.dart';
 import 'byte_data_view.dart';
+import 'cache_priority.dart';
 import 'deferred_operation.dart';
 import 'memory_manager.dart';
 import 'memory_pressure_level.dart';
@@ -405,19 +406,6 @@ class DataStore {
   }
 }
 
-/// 缓存项的优先级
-enum CachePriority {
-  /// 高优先级缓存，仅在高内存压力下清理
-  high,
-
-  /// 中优先级缓存，在中度内存压力下清理
-  medium,
-
-  /// 低优先级缓存，在轻度内存压力下清理
-  low,
-}
-
-/// 缓存项
 class CacheItem<T> {
   /// 缓存的数据
   final T data;

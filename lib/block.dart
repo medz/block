@@ -15,6 +15,7 @@ library;
 
 export 'src/block.dart';
 export 'src/byte_data_view.dart';
+export 'src/cache_priority.dart';
 export 'src/deferred_operation.dart';
 export 'src/memory_manager.dart';
 export 'src/disposable_block.dart';
