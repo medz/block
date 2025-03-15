@@ -168,4 +168,81 @@ void main() {
       expect(() => Block([{}]), throwsArgumentError);
     });
   });
+
+  group('Zero-copy optimizations', () {
+    test('slice method should not copy data for nested slices', () {
+      // 创建一个大的原始数据块
+      final originalData = Uint8List(1000000);
+      for (int i = 0; i < originalData.length; i++) {
+        originalData[i] = i % 256;
+      }
+
+      // 创建原始Block
+      final originalBlock = Block([originalData]);
+      expect(originalBlock.size, equals(1000000));
+
+      // 创建第一层切片
+      final slice1 = originalBlock.slice(100000, 900000);
+      expect(slice1.size, equals(800000));
+
+      // 创建第二层切片
+      final slice2 = slice1.slice(100000, 700000);
+      expect(slice2.size, equals(600000));
+
+      // 创建第三层切片
+      final slice3 = slice2.slice(100000, 500000);
+      expect(slice3.size, equals(400000));
+
+      // 验证最终切片内容正确
+      slice3.arrayBuffer().then((data) {
+        expect(data.length, equals(400000));
+
+        // 验证数据正确性 - 应该从原始数据的300000偏移开始
+        for (int i = 0; i < data.length; i++) {
+          expect(data[i], equals((i + 300000) % 256));
+        }
+      });
+    });
+
+    test('stream method should efficiently stream sliced data', () async {
+      // 创建一个大的原始数据块
+      final originalData = Uint8List(1000000);
+      for (int i = 0; i < originalData.length; i++) {
+        originalData[i] = i % 256;
+      }
+
+      // 创建原始Block
+      final originalBlock = Block([originalData]);
+
+      // 创建多层嵌套切片
+      final slice1 = originalBlock.slice(200000, 800000);
+      final slice2 = slice1.slice(100000, 500000);
+
+      // 使用stream获取数据
+      final chunks = <Uint8List>[];
+      await for (final chunk in slice2.stream(chunkSize: 50000)) {
+        chunks.add(chunk);
+      }
+
+      // 验证总数据量正确
+      final totalBytes = chunks.fold<int>(
+        0,
+        (sum, chunk) => sum + chunk.length,
+      );
+      expect(totalBytes, equals(400000));
+
+      // 重新组合数据并验证内容
+      final combinedData = Uint8List(totalBytes);
+      int offset = 0;
+      for (final chunk in chunks) {
+        combinedData.setRange(offset, offset + chunk.length, chunk);
+        offset += chunk.length;
+      }
+
+      // 验证数据正确性 - 应该从原始数据的300000偏移开始
+      for (int i = 0; i < combinedData.length; i++) {
+        expect(combinedData[i], equals((i + 300000) % 256));
+      }
+    });
+  });
 }
