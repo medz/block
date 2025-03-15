@@ -739,11 +739,6 @@ class Block {
   /// The internal storage of data chunks
   final List<Uint8List> _chunks;
 
-  /// The data size in bytes.
-  ///
-  /// This is lazily calculated when first accessed and then cached.
-  int? _size;
-
   /// The MIME type of the Block
   final String _type;
 
@@ -754,10 +749,21 @@ class Block {
   final int _startOffset;
 
   /// For slices: length of this slice in bytes
-  final int _sliceLength;
+  int _sliceLength;
 
   /// 当前Block实例的内存成本（以字节为单位）
   final int _memoryCost;
+
+  /// 原始构造函数参数，用于延迟数据处理
+  final List<dynamic>? _rawParts;
+
+  /// 数据是否已处理的标志
+  bool _dataProcessed = false;
+
+  /// The data size in bytes.
+  ///
+  /// This is lazily calculated when first accessed and then cached.
+  int? _size;
 
   /// 静态内存统计：跟踪所有Block实例的总内存使用量
   static int _totalMemoryUsage = 0;
@@ -1094,12 +1100,14 @@ class Block {
   /// final emptyBlock = Block([], type: 'application/octet-stream');
   /// ```
   Block(List<dynamic> parts, {String type = ''})
-    : _chunks = _createBlockChunks(parts),
+    : _chunks = [], // 初始化为空列表，稍后再处理
+      _rawParts = parts, // 保存原始参数
       _type = type,
       _parent = null,
       _startOffset = 0,
-      _sliceLength = _calculateTotalSize(parts),
-      _memoryCost = _calculateMemoryCost(parts) {
+      _sliceLength = 0, // 稍后计算
+      _memoryCost = _calculateMemoryCost(parts),
+      _dataProcessed = false {
     _registerMemoryUsage();
   }
 
@@ -1110,18 +1118,38 @@ class Block {
     this._sliceLength, {
     required String type,
   }) : _chunks = [],
+       _rawParts = null,
        _type = type,
-       _memoryCost = _calculateSliceMemoryCost(_sliceLength) {
+       _memoryCost = _calculateSliceMemoryCost(_sliceLength),
+       _dataProcessed = true {
     _registerMemoryUsage();
   }
 
   /// Internal constructor for creating Block from explicit chunks
   Block._fromChunks(this._chunks, int totalSize, this._type)
     : _parent = null,
+      _rawParts = null,
       _startOffset = 0,
       _sliceLength = totalSize,
-      _memoryCost = _calculateChunksMemoryCost(_chunks) {
+      _memoryCost = _calculateChunksMemoryCost(_chunks),
+      _dataProcessed = true {
     _registerMemoryUsage();
+  }
+
+  /// 当需要时处理数据
+  void _processDataIfNeeded() {
+    // 如果已经处理过数据或没有原始数据，则直接返回
+    if (_dataProcessed || _rawParts == null) {
+      return;
+    }
+
+    // 处理原始数据
+    final procesedChunks = _createBlockChunks(_rawParts!);
+    _chunks.addAll(procesedChunks);
+    _sliceLength = _calculateTotalSize(_rawParts!);
+
+    // 标记为已处理
+    _dataProcessed = true;
   }
 
   // 注册内存使用并设置finalizer
@@ -1155,20 +1183,20 @@ class Block {
       return _blockInstanceBaseSize;
     }
 
+    // 为了支持延迟加载，这里提供一个简单估计而不是实际处理数据
+    // 这种估计可能不太准确，但能快速计算出大致的内存成本
     int memoryCost = _blockInstanceBaseSize;
     for (final part in parts) {
       if (part is String) {
-        // 字符串的UTF-8编码后大小
-        memoryCost += utf8.encode(part).length;
+        // 字符串的UTF-8编码后估计大小
+        memoryCost += part.length * 2; // 粗略估计字符串的UTF-8大小
       } else if (part is Uint8List) {
         memoryCost += part.length;
       } else if (part is ByteData) {
         memoryCost += part.lengthInBytes;
       } else if (part is Block) {
-        // 对于Block部分，不重复计算内存成本，
-        // 因为原始Block已经计算过它的内存使用
-        // 但我们需要添加引用的成本
-        memoryCost += _blockReferenceSize;
+        // 对于Block部分，使用它的memoryCost属性
+        memoryCost += part.memoryCost;
       }
     }
     return memoryCost;
@@ -1377,6 +1405,9 @@ class Block {
   ///
   /// The size is lazily calculated when first accessed and then cached.
   int get size {
+    // 确保数据已处理
+    _processDataIfNeeded();
+
     // 如果已经计算过，直接返回缓存的结果
     if (_size != null) {
       return _size!;
@@ -1413,6 +1444,9 @@ class Block {
   /// final slice = block.slice(10, 20, 'text/plain');
   /// ```
   Block slice(int start, [int? end, String? contentType]) {
+    // 确保数据已处理
+    _processDataIfNeeded();
+
     // Handle negative indices
     final int dataSize = size;
 
@@ -1464,6 +1498,9 @@ class Block {
   /// final data = await block.arrayBuffer();
   /// ```
   Future<Uint8List> arrayBuffer() async {
+    // 确保数据已处理
+    _processDataIfNeeded();
+
     // 尝试零拷贝方式获取数据
     final directData = getDirectData();
     if (directData != null) {
@@ -1500,6 +1537,9 @@ class Block {
   /// final byte = view.getUint8(10); // 获取第11个字节
   /// ```
   ByteDataView getByteDataView() {
+    // 确保数据已处理
+    _processDataIfNeeded();
+
     if (_parent != null) {
       // 从父Block创建视图
       var parentView = _parent!.getByteDataView();
@@ -1528,6 +1568,9 @@ class Block {
   /// }
   /// ```
   Uint8List? getDirectData() {
+    // 确保数据已处理
+    _processDataIfNeeded();
+
     // 如果是单个连续块，直接返回
     if (_parent == null && _chunks.length == 1 && _chunks[0].length == size) {
       return _chunks[0];
@@ -1563,6 +1606,9 @@ class Block {
   /// // 使用buffer进行高效操作
   /// ```
   ByteBuffer getByteBuffer() {
+    // 确保数据已处理
+    _processDataIfNeeded();
+
     // 尝试获取直接数据引用
     final directData = getDirectData();
     if (directData != null) {
@@ -1587,6 +1633,9 @@ class Block {
   /// }
   /// ```
   Stream<Uint8List> stream({int chunkSize = 1024 * 64}) async* {
+    // 确保数据已处理
+    _processDataIfNeeded();
+
     // 如果Block很小，直接返回整个数据
     if (size <= chunkSize) {
       // 尝试零拷贝方式获取数据
