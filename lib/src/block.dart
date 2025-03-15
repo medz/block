@@ -15,6 +15,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:math' as math;
+
+import 'deferred_operation.dart';
 
 /// 表示对原始二进制数据的视图，无需复制数据
 ///
@@ -1521,7 +1524,97 @@ class Block {
   /// final text = await block.text();
   /// ```
   Future<String> text({Encoding encoding = utf8}) async {
-    return encoding.decode(await arrayBuffer());
+    // 返回延迟文本操作，节省了不需要立即执行时的解码成本
+    return DeferredOperations.text(this, encoding: encoding).execute();
+  }
+
+  /// 创建延迟文本解码操作
+  ///
+  /// 返回一个可以在需要时执行的延迟操作，而不是立即执行解码。
+  /// 这允许你使用链式操作而不必立即执行。
+  ///
+  /// 示例：
+  /// ```dart
+  /// final textOp = block.textOperation();
+  /// // ... 执行其他操作 ...
+  /// final text = await textOp.execute(); // 解码仅在这里执行
+  /// ```
+  DeferredOperation<String> textOperation({Encoding encoding = utf8}) {
+    return DeferredOperations.text(this, encoding: encoding);
+  }
+
+  /// 静态方法合并多个Block
+  ///
+  /// 此方法创建一个新的Block，包含所有输入Block的数据。
+  /// 这类似于将多个块连接在一起。
+  ///
+  /// 示例：
+  /// ```dart
+  /// final mergedBlock = await Block.merge([block1, block2, block3]);
+  /// ```
+  static Future<Block> merge(List<Block> blocks, {String type = ''}) async {
+    return DeferredOperations.merge(blocks, type: type).execute();
+  }
+
+  /// 创建一个延迟合并操作
+  ///
+  /// 返回一个可以在需要时执行的延迟操作，而不是立即执行合并。
+  ///
+  /// 示例：
+  /// ```dart
+  /// final mergeOp = Block.mergeOperation([block1, block2, block3]);
+  /// // ... 执行其他操作 ...
+  /// final mergedBlock = await mergeOp.execute(); // 合并仅在这里执行
+  /// ```
+  static DeferredOperation<Block> mergeOperation(
+    List<Block> blocks, {
+    String type = '',
+  }) {
+    return DeferredOperations.merge(blocks, type: type);
+  }
+
+  /// 执行自定义数据转换操作
+  ///
+  /// 允许对Block数据应用自定义转换，并返回结果。
+  /// 转换延迟执行直到需要结果。
+  ///
+  /// 示例：
+  /// ```dart
+  /// // 转换为base64字符串
+  /// final base64 = await block.transform((data) =>
+  ///   Future.value(base64Encode(data)),
+  ///   'base64Encoding'
+  /// );
+  /// ```
+  Future<T> transform<T>(
+    Future<T> Function(Uint8List data) transformer,
+    String transformType,
+  ) async {
+    return DeferredOperations.transform(
+      this,
+      transformer,
+      transformType,
+    ).execute();
+  }
+
+  /// 创建延迟数据转换操作
+  ///
+  /// 返回一个可以在需要时执行的延迟操作，而不是立即执行转换。
+  ///
+  /// 示例：
+  /// ```dart
+  /// final base64Op = block.transformOperation(
+  ///   (data) => Future.value(base64Encode(data)),
+  ///   'base64Encoding'
+  /// );
+  /// // ... 执行其他操作 ...
+  /// final base64 = await base64Op.execute(); // 转换仅在这里执行
+  /// ```
+  DeferredOperation<T> transformOperation<T>(
+    Future<T> Function(Uint8List data) transformer,
+    String transformType,
+  ) {
+    return DeferredOperations.transform<T>(this, transformer, transformType);
   }
 
   /// 返回一个ByteDataView，允许在不复制的情况下访问数据

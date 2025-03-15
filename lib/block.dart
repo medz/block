@@ -10,3 +10,10 @@
 library block;
 
 export 'src/block.dart' show Block, ByteDataView, MemoryPressureLevel;
+export 'src/deferred_operation.dart'
+    show
+        DeferredOperation,
+        DeferredOperations,
+        DeferredTextDecoding,
+        DeferredBlockMerge,
+        DeferredDataTransformation;
