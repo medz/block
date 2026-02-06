@@ -9,6 +9,7 @@ import '../slice_bounds.dart';
 
 const String ioTempFilePrefix = 'block_io_';
 const int _sliceCopyThreshold = 64 * 1024;
+const int _ioInternalTransferChunkSize = 1024 * 1024;
 
 Block createIoBlock(List<Object> parts, {String type = ''}) {
   return _IoComposedBlock._fromParts(parts, type: type);
@@ -68,14 +69,52 @@ final class _IoBacking {
     try {
       handle = await file.open(mode: FileMode.write);
       var written = 0;
+      final pending = Uint8List(_ioInternalTransferChunkSize);
+      var pendingLength = 0;
+
+      Future<void> flushPending() async {
+        if (pendingLength == 0) {
+          return;
+        }
+        await handle!.writeFrom(pending, 0, pendingLength);
+        written += pendingLength;
+        pendingLength = 0;
+      }
 
       await for (final chunk in chunks) {
         if (chunk.isEmpty) {
           continue;
         }
-        await handle.writeFrom(chunk);
-        written += chunk.length;
+
+        var sourceOffset = 0;
+        while (sourceOffset < chunk.length) {
+          final available = chunk.length - sourceOffset;
+          if (pendingLength == 0 && available >= _ioInternalTransferChunkSize) {
+            final end = sourceOffset + _ioInternalTransferChunkSize;
+            await handle.writeFrom(chunk, sourceOffset, end);
+            written += _ioInternalTransferChunkSize;
+            sourceOffset = end;
+            continue;
+          }
+
+          final room = pending.length - pendingLength;
+          final take = min(room, available);
+          pending.setRange(
+            pendingLength,
+            pendingLength + take,
+            chunk,
+            sourceOffset,
+          );
+          pendingLength += take;
+          sourceOffset += take;
+
+          if (pendingLength == pending.length) {
+            await flushPending();
+          }
+        }
       }
+
+      await flushPending();
 
       if (written != totalSize) {
         throw StateError(
@@ -131,6 +170,13 @@ final class _IoBacking {
       }
       return bytes;
     });
+  }
+
+  Future<RandomAccessFile> openSequentialReader(int offset) async {
+    _validateRange(totalSize, offset, 0);
+    final reader = await file.open(mode: FileMode.read);
+    await reader.setPosition(offset);
+    return reader;
   }
 
   Future<T> _enqueue<T>(Future<T> Function() action) {
@@ -197,12 +243,31 @@ final class _IoBlock implements Block, _IoReadable {
     int chunkSize = Block.defaultStreamChunkSize,
   }) async* {
     _validateChunkSize(chunkSize);
+    if (_length == 0) {
+      return;
+    }
 
-    var readOffset = 0;
-    while (readOffset < _length) {
-      final toRead = min(chunkSize, _length - readOffset);
-      yield await readRange(readOffset, toRead);
-      readOffset += toRead;
+    final reader = await _backing.openSequentialReader(_offset);
+    var remaining = _length;
+
+    try {
+      while (remaining > 0) {
+        final toRead = min(chunkSize, remaining);
+        final chunk = await reader.read(toRead);
+        if (chunk.isEmpty) {
+          throw StateError(
+            'Unexpected end of file while streaming ${_backing.file.path}.',
+          );
+        }
+        yield chunk;
+        remaining -= chunk.length;
+      }
+    } finally {
+      try {
+        await reader.close();
+      } catch (_) {
+        // best-effort cleanup.
+      }
     }
   }
 
@@ -221,7 +286,7 @@ abstract base class _IoCompositePart {
 
   Future<Uint8List> readRange(int start, int length);
 
-  Stream<Uint8List> stream();
+  Stream<Uint8List> stream({required int chunkSize});
 }
 
 final class _IoBytesPart extends _IoCompositePart {
@@ -244,9 +309,12 @@ final class _IoBytesPart extends _IoCompositePart {
   }
 
   @override
-  Stream<Uint8List> stream() async* {
-    if (_bytes.isNotEmpty) {
-      yield Uint8List.fromList(_bytes);
+  Stream<Uint8List> stream({required int chunkSize}) async* {
+    var offset = 0;
+    while (offset < _bytes.length) {
+      final end = min(offset + chunkSize, _bytes.length);
+      yield Uint8List.fromList(_bytes.sublist(offset, end));
+      offset = end;
     }
   }
 }
@@ -267,8 +335,17 @@ final class _IoReadablePart extends _IoCompositePart {
   }
 
   @override
-  Stream<Uint8List> stream() {
-    return _streamReadableRange(_source, _sourceOffset, length);
+  Stream<Uint8List> stream({required int chunkSize}) {
+    if (_sourceOffset == 0 && length == _source.size && _source is Block) {
+      return (_source as Block).stream(chunkSize: chunkSize);
+    }
+
+    return _streamReadableRange(
+      _source,
+      _sourceOffset,
+      length,
+      chunkSize: chunkSize,
+    );
   }
 }
 
@@ -291,11 +368,11 @@ final class _IoForeignBlockPart extends _IoCompositePart {
   }
 
   @override
-  Stream<Uint8List> stream() {
+  Stream<Uint8List> stream({required int chunkSize}) {
     if (length == 0) {
       return const Stream<Uint8List>.empty();
     }
-    return _block.stream();
+    return _block.stream(chunkSize: chunkSize);
   }
 }
 
@@ -352,8 +429,8 @@ final class _IoComposedBlock implements Block, _IoReadable {
   Stream<Uint8List> stream({
     int chunkSize = Block.defaultStreamChunkSize,
   }) async* {
-    final materialized = await ensureMaterialized();
-    yield* materialized.stream(chunkSize: chunkSize);
+    _validateChunkSize(chunkSize);
+    yield* _streamAllPartsDirect(chunkSize: chunkSize);
   }
 
   @override
@@ -384,7 +461,10 @@ final class _IoComposedBlock implements Block, _IoReadable {
 
   Future<_IoBlock> _materialize() async {
     try {
-      final backing = await _IoBacking.fromChunks(_streamAllParts(), _length);
+      final backing = await _IoBacking.fromChunks(
+        _streamAllPartsForMaterialization(),
+        _length,
+      );
       final materialized = _IoBlock._(backing, 0, _length, _type);
       _materialized = materialized;
       return materialized;
@@ -393,9 +473,15 @@ final class _IoComposedBlock implements Block, _IoReadable {
     }
   }
 
-  Stream<Uint8List> _streamAllParts() async* {
+  Stream<Uint8List> _streamAllPartsForMaterialization() async* {
     for (final part in _parts) {
-      yield* part.stream();
+      yield* part.stream(chunkSize: _ioInternalTransferChunkSize);
+    }
+  }
+
+  Stream<Uint8List> _streamAllPartsDirect({required int chunkSize}) async* {
+    for (final part in _parts) {
+      yield* part.stream(chunkSize: chunkSize);
     }
   }
 
@@ -630,11 +716,12 @@ final class _IoDeferredSliceBlock implements Block, _IoReadable {
 Stream<Uint8List> _streamReadableRange(
   _IoReadable source,
   int sourceOffset,
-  int length,
-) async* {
+  int length, {
+  required int chunkSize,
+}) async* {
   var readOffset = 0;
   while (readOffset < length) {
-    final toRead = min(Block.defaultStreamChunkSize, length - readOffset);
+    final toRead = min(chunkSize, length - readOffset);
     yield await source.readRange(sourceOffset + readOffset, toRead);
     readOffset += toRead;
   }

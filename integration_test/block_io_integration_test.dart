@@ -19,6 +19,14 @@ void main() {
       final block = Block(<Object>[source], type: 'application/octet-stream');
       expect(_countBlockTempFiles(tempDir), equals(0));
 
+      final streamed = <int>[];
+      await for (final chunk in block.stream(chunkSize: 64 * 1024)) {
+        expect(chunk.length, lessThanOrEqualTo(64 * 1024));
+        streamed.addAll(chunk);
+      }
+      expect(streamed, equals(source));
+      expect(_countBlockTempFiles(tempDir), equals(0));
+
       final smallSlice = block.slice(0, 1024);
       final largeSlice = block.slice(0, 128 * 1024);
       expect(_countBlockTempFiles(tempDir), equals(0));
@@ -34,6 +42,11 @@ void main() {
       final parentBytes = await block.arrayBuffer();
       expect(parentBytes, equals(source));
       expect(_countBlockTempFiles(tempDir), equals(2));
+
+      final textBlock = Block(<Object>['abc']);
+      expect(_countBlockTempFiles(tempDir), equals(2));
+      expect(await textBlock.text(), equals('abc'));
+      expect(_countBlockTempFiles(tempDir), equals(3));
     });
   });
 }
