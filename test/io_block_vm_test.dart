@@ -5,93 +5,126 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:block/block.dart';
-import 'package:block/src/testing/block_debug.dart';
 import 'package:test/test.dart';
+
+import 'support/foreign_block.dart';
 
 void main() {
   group('IO implementation', () {
-    test('materializes temporary file backing on first read', () async {
-      final block = Block(<Object>[
-        Uint8List.fromList(const [1, 2, 3]),
-      ]);
+    test('materializes temporary file on first read', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        expect(_countBlockTempFiles(tempDir), equals(0));
 
-      expect(blockImplementation(block), equals('io'));
+        final block = Block(<Object>[
+          Uint8List.fromList(const [1, 2, 3]),
+        ]);
 
-      expect(ioBackingPath(block), isNull);
-      expect(ioBackingIdentity(block), isNull);
+        expect(_countBlockTempFiles(tempDir), equals(0));
 
-      final bytes = await block.arrayBuffer();
-      expect(bytes, equals(Uint8List.fromList(const [1, 2, 3])));
-
-      final path = ioBackingPath(block);
-      expect(path, isNotNull);
-      expect(File(path!).existsSync(), isTrue);
-
-      final name = path.split(Platform.pathSeparator).last;
-      expect(name, startsWith(ioBackingFilePrefix()));
+        final bytes = await block.arrayBuffer();
+        expect(bytes, equals(Uint8List.fromList(const [1, 2, 3])));
+        expect(_countBlockTempFiles(tempDir), equals(1));
+      });
     });
 
-    test('nested Block parts are materialized lazily on first read', () async {
-      final child = Block(<Object>['child']);
-      final parent = Block(<Object>['[', child, ']']);
+    test('supports foreign Block parts lazily', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        final child = ForeignBlock.fromText('child');
+        final parent = Block(<Object>['[', child, ']']);
 
-      expect(parent.size, equals(7));
-      expect(ioBackingPath(parent), isNull);
-      expect(ioBackingIdentity(parent), isNull);
+        expect(parent.size, equals(7));
+        expect(_countBlockTempFiles(tempDir), equals(0));
 
-      final slice = parent.slice(1, 6);
-      expect(ioBackingPath(slice), isNull);
-      expect(ioBackingIdentity(slice), isNull);
+        final slice = parent.slice(1, 6);
+        expect(_countBlockTempFiles(tempDir), equals(0));
 
-      expect(await parent.text(), equals('[child]'));
-      expect(ioBackingPath(parent), isNotNull);
-      expect(ioBackingIdentity(parent), isNotNull);
+        expect(await slice.text(), equals('child'));
+        expect(_countBlockTempFiles(tempDir), equals(1));
 
-      expect(await slice.text(), equals('child'));
-      expect(ioBackingPath(slice), isNotNull);
-      expect(ioBackingIdentity(slice), isNotNull);
+        expect(await parent.text(), equals('[child]'));
+        expect(_countBlockTempFiles(tempDir), equals(2));
+      });
     });
 
-    test('slice <= 64KB copies into a new backing file', () async {
-      final data = Uint8List.fromList(
-        List<int>.generate(200 * 1024, (i) => i % 256),
-      );
-      final parent = Block(<Object>[data]);
-      final child = parent.slice(1024, 1024 + 1024);
+    test('slice <= 64KB copies into a new temp file', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        final data = Uint8List.fromList(
+          List<int>.generate(200 * 1024, (i) => i % 256),
+        );
+        final parent = Block(<Object>[data]);
+        final child = parent.slice(1024, 1024 + 1024);
 
-      expect(ioBackingIdentity(parent), isNull);
-      expect(ioBackingIdentity(child), isNull);
+        expect(_countBlockTempFiles(tempDir), equals(0));
 
-      final bytes = await child.arrayBuffer();
-      expect(bytes, equals(data.sublist(1024, 2048)));
+        final bytes = await child.arrayBuffer();
+        expect(bytes, equals(data.sublist(1024, 2048)));
+        expect(_countBlockTempFiles(tempDir), equals(1));
 
-      expect(ioBackingIdentity(child), isNotNull);
-      expect(ioBackingIdentity(parent), isNull);
-
-      await parent.arrayBuffer();
-      expect(ioBackingIdentity(parent), isNotNull);
-      expect(
-        ioBackingIdentity(child),
-        isNot(equals(ioBackingIdentity(parent))),
-      );
+        await parent.arrayBuffer();
+        expect(_countBlockTempFiles(tempDir), equals(2));
+      });
     });
 
-    test('slice > 64KB shares parent backing file', () async {
-      final data = Uint8List.fromList(
-        List<int>.generate(300 * 1024, (i) => i % 256),
-      );
-      final parent = Block(<Object>[data]);
-      final child = parent.slice(4096, 4096 + 128 * 1024);
+    test('slice > 64KB shares parent materialized file', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        final data = Uint8List.fromList(
+          List<int>.generate(300 * 1024, (i) => i % 256),
+        );
+        final parent = Block(<Object>[data]);
+        final child = parent.slice(4096, 4096 + 128 * 1024);
 
-      expect(ioBackingIdentity(parent), isNull);
-      expect(ioBackingIdentity(child), isNull);
+        expect(_countBlockTempFiles(tempDir), equals(0));
 
-      final bytes = await child.arrayBuffer();
-      expect(bytes, equals(data.sublist(4096, 4096 + 128 * 1024)));
+        final bytes = await child.arrayBuffer();
+        expect(bytes, equals(data.sublist(4096, 4096 + 128 * 1024)));
+        expect(_countBlockTempFiles(tempDir), equals(1));
 
-      final parentBacking = ioBackingIdentity(parent);
-      expect(parentBacking, isNotNull);
-      expect(ioBackingIdentity(child), equals(parentBacking));
+        await parent.arrayBuffer();
+        expect(_countBlockTempFiles(tempDir), equals(1));
+      });
     });
   });
+}
+
+Future<void> _withIsolatedSystemTemp(
+  Future<void> Function(Directory tempDir) body,
+) async {
+  final tempRoot = await Directory.systemTemp.createTemp('block_test_io_');
+
+  try {
+    await IOOverrides.runZoned(() async {
+      await body(tempRoot);
+    }, getSystemTempDirectory: () => tempRoot);
+  } finally {
+    if (await tempRoot.exists()) {
+      await tempRoot.delete(recursive: true);
+    }
+  }
+}
+
+int _countBlockTempFiles(Directory tempDir) {
+  const prefix = 'block_io_';
+  final entities = tempDir.listSync(followLinks: false);
+  var count = 0;
+
+  for (final entity in entities) {
+    if (entity is! File) {
+      continue;
+    }
+
+    final name = _basename(entity.path);
+    if (name.startsWith(prefix)) {
+      count++;
+    }
+  }
+
+  return count;
+}
+
+String _basename(String path) {
+  final separatorIndex = path.lastIndexOf(Platform.pathSeparator);
+  if (separatorIndex < 0 || separatorIndex == path.length - 1) {
+    return path;
+  }
+  return path.substring(separatorIndex + 1);
 }

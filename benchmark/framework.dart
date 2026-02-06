@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:block/src/testing/block_debug.dart';
 import 'package:coal/coal.dart';
 
 typedef BenchmarkCallback = Future<void> Function();
@@ -198,7 +197,7 @@ final class BenchmarkRun {
 }
 
 Future<BenchmarkScenarioResult> runScenario(BenchmarkScenario scenario) async {
-  final tempPrefix = ioBackingFilePrefix();
+  const tempPrefix = 'block_io_';
   final tempFilesBefore = _countTempFilesWithPrefix(tempPrefix);
   final rssBefore = _safeCurrentRss();
   var rssPeak = rssBefore;

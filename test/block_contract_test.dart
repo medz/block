@@ -3,6 +3,8 @@ import 'dart:typed_data';
 import 'package:block/block.dart';
 import 'package:test/test.dart';
 
+import 'support/foreign_block.dart';
+
 void main() {
   group('Block contract', () {
     test('creates empty block', () {
@@ -82,6 +84,14 @@ void main() {
     test('supports nesting with Block parts', () async {
       final child = Block(<Object>['child']);
       final parent = Block(<Object>['[', child, ']']);
+      expect(await parent.text(), equals('[child]'));
+    });
+
+    test('supports foreign Block implementation as part', () async {
+      final child = ForeignBlock.fromText('child');
+      final parent = Block(<Object>['[', child, ']']);
+
+      expect(parent.size, equals(7));
       expect(await parent.text(), equals('[child]'));
     });
 
