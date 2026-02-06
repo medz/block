@@ -31,7 +31,7 @@ Implementation note:
 
 Metrics printed in console:
 
-- `avg(us)`, `p95(us)`, `p99(us)`
-- `throughput(MB/s)` for byte-based scenarios
+- `avg`, `p95`, `p99` with automatic time units (`us`, `ms`, `s`)
+- `throughput` for byte-based scenarios with automatic binary units (`B/s`, `KiB/s`, `MiB/s`, ...)
 - `temp/iter` based on `block_io_` temp-file delta
-- `rss_peak(MB)` as process RSS peak approximation
+- `rss_peak` with automatic binary units (`B`, `KiB`, `MiB`, ...)

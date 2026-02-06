@@ -87,13 +87,13 @@ final class BenchmarkScenarioResult {
   final int rssPeakBytes;
   final List<double> samplesUs;
 
-  double? get throughputMBps {
+  double? get throughputBytesPerSecond {
     if (bytesPerIteration == null || totalUs <= 0) {
       return null;
     }
     final totalBytes = bytesPerIteration! * iterations;
     final seconds = totalUs / 1000000.0;
-    return (totalBytes / (1024 * 1024)) / seconds;
+    return totalBytes / seconds;
   }
 
   double? get tempFilesPerIteration {
@@ -345,30 +345,30 @@ void printBenchmarkReport(BenchmarkRun run, {bool useColors = true}) {
     const headers = <String>[
       'scenario',
       'iters',
-      'avg(us)',
-      'p95(us)',
-      'throughput(MB/s)',
+      'avg',
+      'p95',
+      'throughput',
       'temp/iter',
-      'rss_peak(MB)',
+      'rss_peak',
     ];
     final rows = <List<String>>[];
 
     for (final scenario in entry.value) {
-      final throughput = scenario.throughputMBps == null
+      final throughput = scenario.throughputBytesPerSecond == null
           ? '-'
-          : scenario.throughputMBps!.toStringAsFixed(2);
+          : _formatRateBinary(scenario.throughputBytesPerSecond!);
       final tempPerIteration = scenario.tempFilesPerIteration == null
           ? '-'
           : scenario.tempFilesPerIteration!.toStringAsFixed(4);
       final rssPeak = scenario.rssPeakBytes < 0
           ? '-'
-          : (scenario.rssPeakBytes / (1024 * 1024)).toStringAsFixed(2);
+          : _formatBytesBinary(scenario.rssPeakBytes.toDouble());
 
       rows.add(<String>[
         scenario.name,
         '${scenario.iterations}',
-        scenario.avgUs.toStringAsFixed(2),
-        scenario.p95Us.toStringAsFixed(2),
+        _formatLatencyFromUs(scenario.avgUs),
+        _formatLatencyFromUs(scenario.p95Us),
         throughput,
         tempPerIteration,
         rssPeak,
@@ -421,6 +421,38 @@ String _tableLine(
     formatted.add(value);
   }
   return '| ${formatted.join(' | ')} |';
+}
+
+String _formatLatencyFromUs(double microseconds) {
+  if (microseconds >= 1000000) {
+    return '${(microseconds / 1000000).toStringAsFixed(2)} s';
+  }
+  if (microseconds >= 1000) {
+    return '${(microseconds / 1000).toStringAsFixed(2)} ms';
+  }
+  return '${microseconds.toStringAsFixed(2)} us';
+}
+
+String _formatRateBinary(double bytesPerSecond) {
+  return '${_formatBinaryMagnitude(bytesPerSecond)}/s';
+}
+
+String _formatBytesBinary(double bytes) {
+  return _formatBinaryMagnitude(bytes);
+}
+
+String _formatBinaryMagnitude(double value) {
+  const units = <String>['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  var scaled = value;
+  var unitIndex = 0;
+
+  while (scaled >= 1024 && unitIndex < units.length - 1) {
+    scaled /= 1024;
+    unitIndex++;
+  }
+
+  final decimals = scaled >= 100 ? 0 : 2;
+  return '${scaled.toStringAsFixed(decimals)} ${units[unitIndex]}';
 }
 
 Uint8List makeSequentialBytes(int size) {

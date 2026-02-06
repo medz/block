@@ -187,7 +187,7 @@ int _parseIntArg(String? raw, {required int fallback}) {
     return fallback;
   }
   final parsed = int.tryParse(raw);
-  if (parsed == null || parsed < 0) {
+  if (parsed == null || parsed <= 0) {
     return fallback;
   }
   return parsed;
