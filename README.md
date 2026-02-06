@@ -25,21 +25,23 @@ dart pub add block
 ```dart
 import 'package:block/block.dart';
 
-final block = Block([
-  'hello ',
-  'world',
-], type: 'text/plain');
+Future<void> main() async {
+  final block = Block([
+    'hello ',
+    'world',
+  ], type: 'text/plain');
 
-final size = block.size;
-final type = block.type;
+  final size = block.size;
+  final type = block.type;
 
-final bytes = await block.arrayBuffer();
-final text = await block.text();
+  final bytes = await block.arrayBuffer();
+  final text = await block.text();
 
-final slice = block.slice(0, 5);
+  final slice = block.slice(0, 5);
 
-await for (final chunk in block.stream(chunkSize: 1024)) {
-  // handle chunk
+  await for (final chunk in block.stream(chunkSize: 1024)) {
+    // handle chunk
+  }
 }
 ```
 
