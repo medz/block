@@ -10,6 +10,7 @@
 - One minimal, Blob-compatible API surface.
 - `web`: wraps native browser `Blob` via [`package:web`](https://pub.dev/packages/web).
 - `io`: stores block data in temp files and uses finalizers for cleanup.
+- `Block` parts are resolved lazily: bytes are fetched/materialized on first read (`arrayBuffer`/`text`/`stream`).
 - `slice()` strategy on `io`:
   - `<= 64KB`: copy to a new temp file
   - `> 64KB`: share backing file with offset/length view
@@ -51,6 +52,11 @@ Supported constructor part types:
 - `Uint8List`
 - `ByteData`
 - `Block`
+
+Additional web-only part types:
+
+- `web.Blob`
+- `web.File`
 
 ## Breaking Reset in 1.0.0
 
