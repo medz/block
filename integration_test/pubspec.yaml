@@ -1,0 +1,18 @@
+name: block_flutter_integration
+publish_to: 'none'
+
+environment:
+  sdk: ^3.10.0
+  flutter: '>=3.22.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  block:
+    path: ..
+
+dev_dependencies:
+  integration_test:
+    sdk: flutter
+  flutter_test:
+    sdk: flutter

@@ -1,203 +1,70 @@
-// Copyright (c) 2023, the Block project authors.
-// Please see the AUTHORS file for details. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
-
-import 'dart:typed_data';
-import 'package:benchmark_harness/benchmark_harness.dart';
 import 'package:block/block.dart';
+
 import 'framework.dart';
 
-/// 小型Block创建测试
-class SmallBlockCreationBenchmark extends MemoryBenchmark {
-  static const int _blockSize = 10 * 1024; // 10KB
-  Uint8List? _data;
-  Block? _block;
+List<BenchmarkScenario> buildCreationScenarios() {
+  final small = makeSequentialBytes(4 * 1024);
+  final medium = makeSequentialBytes(1024 * 1024);
+  final quarter = makeSequentialBytes(256 * 1024);
+  final nestedPart = Block(<Object>[quarter]);
 
-  SmallBlockCreationBenchmark() : super('Small Block Creation (10KB)');
-
-  @override
-  void setup() {
-    super.setup();
-    _data = TestDataGenerator.generateSequentialData(_blockSize);
-  }
-
-  @override
-  void run() {
-    if (_data != null) {
-      _block = Block([_data!]);
-      // 触发数据处理
-      _block!.size;
-      // 添加引用，防止垃圾回收
-      addBlockReference(_block!);
-    }
-  }
-
-  @override
-  void teardown() {
-    // 清理资源
-    _block = null;
-    _data = null;
-    super.teardown();
-  }
-}
-
-/// 中型Block创建测试
-class MediumBlockCreationBenchmark extends MemoryBenchmark {
-  static const int _blockSize = 1 * 1024 * 1024; // 1MB
-  Uint8List? _data;
-  Block? _block;
-
-  MediumBlockCreationBenchmark() : super('Medium Block Creation (1MB)');
-
-  @override
-  void setup() {
-    super.setup();
-    _data = TestDataGenerator.generateSequentialData(_blockSize);
-  }
-
-  @override
-  void run() {
-    if (_data != null) {
-      _block = Block([_data!]);
-      // 触发数据处理
-      _block!.size;
-      // 添加引用，防止垃圾回收
-      addBlockReference(_block!);
-    }
-  }
-
-  @override
-  void teardown() {
-    // 清理资源
-    _block = null;
-    _data = null;
-    super.teardown();
-  }
-}
-
-/// 大型Block创建测试
-class LargeBlockCreationBenchmark extends MemoryBenchmark {
-  static const int _blockSize = 10 * 1024 * 1024; // 10MB
-  Uint8List? _data;
-  Block? _block;
-
-  LargeBlockCreationBenchmark() : super('Large Block Creation (10MB)');
-
-  @override
-  void setup() {
-    super.setup();
-    _data = TestDataGenerator.generateSequentialData(_blockSize);
-  }
-
-  @override
-  void run() {
-    if (_data != null) {
-      _block = Block([_data!]);
-      // 触发数据处理
-      _block!.size;
-      // 添加引用，防止垃圾回收
-      addBlockReference(_block!);
-    }
-  }
-
-  @override
-  void teardown() {
-    // 清理资源
-    _block = null;
-    _data = null;
-    super.teardown();
-  }
-}
-
-/// 多部分Block创建测试
-class MultiPartBlockCreationBenchmark extends MemoryBenchmark {
-  static const int _partCount = 5;
-  static const int _partSize = 1 * 1024 * 1024; // 1MB
-  List<Uint8List>? _parts;
-  Block? _block;
-
-  MultiPartBlockCreationBenchmark()
-    : super('Multi-part Block Creation (5x 1MB)');
-
-  @override
-  void setup() {
-    super.setup();
-    _parts = List.generate(
-      _partCount,
-      (i) => TestDataGenerator.generateSequentialData(_partSize),
-    );
-  }
-
-  @override
-  void run() {
-    if (_parts != null) {
-      _block = Block(_parts!);
-      // 触发数据处理
-      _block!.size;
-      // 添加引用，防止垃圾回收
-      addBlockReference(_block!);
-    }
-  }
-
-  @override
-  void teardown() {
-    // 清理资源
-    _block = null;
-    _parts?.clear();
-    _parts = null;
-    super.teardown();
-  }
-}
-
-/// 字符串Block创建测试
-class StringBlockCreationBenchmark extends MemoryBenchmark {
-  static const int _charCount = 1000000; // 1M字符
-  String? _text;
-  Block? _block;
-
-  StringBlockCreationBenchmark() : super('String Block Creation (1M chars)');
-
-  @override
-  void setup() {
-    super.setup();
-    // 创建一个包含100万字符的字符串
-    final buffer = StringBuffer();
-    for (int i = 0; i < _charCount; i++) {
-      buffer.write(String.fromCharCode(65 + (i % 26))); // A-Z循环
-    }
-    _text = buffer.toString();
-  }
-
-  @override
-  void run() {
-    if (_text != null) {
-      _block = Block([_text!]);
-      // 触发数据处理
-      _block!.size;
-      // 添加引用，防止垃圾回收
-      addBlockReference(_block!);
-    }
-  }
-
-  @override
-  void teardown() {
-    // 清理资源
-    _block = null;
-    _text = null;
-    super.teardown();
-  }
-}
-
-/// 主函数
-void main() {
-  final benchmarks = <BenchmarkBase>[
-    SmallBlockCreationBenchmark(),
-    MediumBlockCreationBenchmark(),
-    LargeBlockCreationBenchmark(),
-    MultiPartBlockCreationBenchmark(),
-    StringBlockCreationBenchmark(),
+  return <BenchmarkScenario>[
+    BenchmarkScenario.sync(
+      name: 'create/single_part_4kb',
+      category: 'Creation',
+      iterations: 500,
+      bytesPerIteration: small.length,
+      maxIterationsPerProcess: 96,
+      action: () {
+        final block = Block(<Object>[small]);
+        if (block.size != small.length) {
+          throw StateError('size mismatch');
+        }
+      },
+    ),
+    BenchmarkScenario.sync(
+      name: 'create/single_part_1mb',
+      category: 'Creation',
+      iterations: 80,
+      bytesPerIteration: medium.length,
+      maxIterationsPerProcess: 48,
+      action: () {
+        final block = Block(<Object>[medium]);
+        if (block.size != medium.length) {
+          throw StateError('size mismatch');
+        }
+      },
+    ),
+    BenchmarkScenario.sync(
+      name: 'concat/bytes_4x256kb',
+      category: 'Concatenation',
+      iterations: 120,
+      bytesPerIteration: 1024 * 1024,
+      maxIterationsPerProcess: 64,
+      action: () {
+        final block = Block(<Object>[quarter, quarter, quarter, quarter]);
+        if (block.size != 1024 * 1024) {
+          throw StateError('size mismatch');
+        }
+      },
+    ),
+    BenchmarkScenario.sync(
+      name: 'concat/blocks_4x256kb',
+      category: 'Concatenation',
+      iterations: 120,
+      bytesPerIteration: 1024 * 1024,
+      maxIterationsPerProcess: 64,
+      action: () {
+        final block = Block(<Object>[
+          nestedPart,
+          nestedPart,
+          nestedPart,
+          nestedPart,
+        ]);
+        if (block.size != 1024 * 1024) {
+          throw StateError('size mismatch');
+        }
+      },
+    ),
   ];
-
-  runAllBenchmarks(benchmarks);
 }

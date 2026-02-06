@@ -1,129 +1,194 @@
-// Copyright (c) 2023, the Block project authors.
-// Please see the AUTHORS file for details. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
-
+import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
-import 'package:block/block.dart';
+import 'dart:math';
 
-// 导入所有基准测试
-import 'block_creation_benchmark.dart' as creation;
-import 'block_operations_benchmark.dart' as operations;
-import 'deduplication_benchmark.dart' as deduplication;
+import 'package:coal/args.dart';
 
-/// 为文本添加颜色（终端输出）
-String colorText(String text, int colorCode) {
-  return '\x1B[${colorCode}m$text\x1B[0m';
-}
+import 'block_creation_benchmark.dart';
+import 'block_operations_benchmark.dart';
+import 'composition_benchmark.dart';
+import 'framework.dart';
 
-/// 打印日期和时间标题
-void printDateTimeHeader() {
-  final now = DateTime.now();
-  final formattedDateTime =
-      '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
-      '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
+Future<void> main(List<String> args) async {
+  final parsed = Args.parse(
+    args,
+    bool: const ['help', 'no-color', 'worker'],
+    string: const ['scenario', 'iterations', 'warmup'],
+    aliases: const {'h': 'help'},
+  );
 
-  print(colorText('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 36));
-  print(colorText('Block 基准测试 - $formattedDateTime', 32));
-  print(colorText('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n', 36));
-}
-
-/// 打印系统信息
-void printSystemInfo() {
-  print('=== 系统信息 ===');
-  print('操作系统: ${Platform.operatingSystem} ${Platform.operatingSystemVersion}');
-  print('Dart版本: ${Platform.version}');
-  print('CPU核心数: ${Platform.numberOfProcessors}');
-  print('===============\n');
-}
-
-/// 打印测试组标题
-void printTestGroupHeader(String title) {
-  print(colorText('\n▶ $title', 35));
-  print(colorText('--------------------------------', 90));
-}
-
-/// 运行所有基准测试
-void main() {
-  printDateTimeHeader();
-  printSystemInfo();
-
-  // 重置数据去重统计，为所有测试提供统一的起点
-  Block.resetDataDeduplication();
-
-  print(colorText('\n=== Block创建基准测试 ===', 32));
-  creation.main();
-
-  print(colorText('\n=== Block操作基准测试 ===', 32));
-  operations.main();
-
-  print(colorText('\n=== 数据去重基准测试 ===', 32));
-  deduplication.main();
-
-  // 单独为最终验证测试重置数据去重统计
-  Block.resetDataDeduplication();
-
-  // 进行数据去重实际测试
-  testDeduplication();
-
-  print(colorText('\n所有基准测试完成！', 32));
-}
-
-/// 进行实际的数据去重测试，检验数据去重功能
-void testDeduplication() {
-  print(colorText('\n=== 数据去重功能验证 ===', 35));
-
-  // 重置数据去重统计
-  Block.resetDataDeduplication();
-
-  // 创建一个数据对象
-  final data = Uint8List(1 * 1024 * 1024); // 1MB
-  for (int i = 0; i < data.length; i++) {
-    data[i] = i % 256;
+  if ((parsed['help']?.safeAs<bool>()) ?? false) {
+    print('Run block benchmarks in console.');
+    print('');
+    print('Usage:');
+    print('  dart benchmark/run_all.dart [--no-color]');
+    print('');
+    print('Options:');
+    print('  --no-color    Disable ANSI styling.');
+    print('  -h, --help    Show this help.');
+    return;
   }
 
-  print('创建10个相同数据的Block...');
-  final blocks = <Block>[];
+  final scenarios = <BenchmarkScenario>[
+    ...buildCreationScenarios(),
+    ...buildOperationScenarios(),
+    ...buildCompositionScenarios(),
+  ];
 
-  // 创建10个Block，每个都包含相同的数据
-  for (int i = 0; i < 10; i++) {
-    final block = Block([data]);
-    block.size; // 触发数据处理
-    blocks.add(block);
+  final scenarioMap = {
+    for (final scenario in scenarios) scenario.name: scenario,
+  };
 
-    // 输出去重进度
-    if (i > 0 && i % 2 == 0) {
-      // 强制更新内存统计
-      Block.forceUpdateMemoryStatistics();
-
-      print(
-        '已创建 ${i + 1} 个Block，当前重复计数: ${Block.getDataDeduplicationDuplicateCount()}',
-      );
+  if ((parsed['worker']?.safeAs<bool>()) ?? false) {
+    final scenarioName = parsed['scenario']?.safeAs<String>();
+    if (scenarioName == null || !scenarioMap.containsKey(scenarioName)) {
+      stderr.writeln('Unknown or missing --scenario for worker mode.');
+      exitCode = 2;
+      return;
     }
+
+    final source = scenarioMap[scenarioName]!;
+    final workerIterations = _parseIntArg(
+      parsed['iterations']?.safeAs<String>(),
+      fallback: source.iterations,
+    );
+    final workerWarmup = _parseIntArg(
+      parsed['warmup']?.safeAs<String>(),
+      fallback: source.warmup,
+    );
+
+    final workerScenario = BenchmarkScenario(
+      name: source.name,
+      category: source.category,
+      iterations: workerIterations,
+      warmup: workerWarmup,
+      bytesPerIteration: source.bytesPerIteration,
+      maxIterationsPerProcess: source.maxIterationsPerProcess,
+      action: source.action,
+    );
+
+    final result = await runScenario(workerScenario);
+    print('WORKER_RESULT_JSON=${jsonEncode(result.toJson())}');
+    return;
   }
 
-  // 强制更新内存统计
-  Block.forceUpdateMemoryStatistics();
+  final run = await _runBenchmarksWithWorkers(scenarios);
 
-  // 输出最终统计
-  final duplicateCount = Block.getDataDeduplicationDuplicateCount();
-  final savedMemory = Block.getDataDeduplicationSavedMemory();
-  final report = Block.getDataDeduplicationReport();
+  printBenchmarkReport(
+    run,
+    useColors: !((parsed['no-color']?.safeAs<bool>()) ?? false),
+  );
+}
 
-  print(colorText('\n=== 数据去重结果 ===', 36));
-  print('重复块数量: $duplicateCount');
-  print('节省内存: ${(savedMemory / 1024 / 1024).toStringAsFixed(2)} MB');
-  print('唯一块数量: ${report['uniqueBlockCount']}');
-  print('总字节数: ${report['totalBytes']}');
-  print('总引用计数: ${report['totalRefCount']}');
+Future<BenchmarkRun> _runBenchmarksWithWorkers(
+  List<BenchmarkScenario> scenarios,
+) async {
+  final environment = BenchmarkEnvironment.capture();
+  final results = <BenchmarkScenarioResult>[];
 
-  // 计算去重效率
-  if (report['totalBytes'] > 0) {
-    final efficiency = (savedMemory / (report['totalBytes'] * 1)) * 100;
-    print('去重效率: ${efficiency.toStringAsFixed(2)}%');
+  for (final scenario in scenarios) {
+    final chunkSize = scenario.maxIterationsPerProcess;
+    if (chunkSize == null || scenario.iterations <= chunkSize) {
+      results.add(
+        await _runWorkerChunk(
+          scenario: scenario,
+          iterations: scenario.iterations,
+          warmup: scenario.warmup,
+        ),
+      );
+      continue;
+    }
+
+    final chunks = <BenchmarkScenarioResult>[];
+    var remaining = scenario.iterations;
+    var first = true;
+
+    while (remaining > 0) {
+      final chunkIterations = min(chunkSize, remaining);
+      chunks.add(
+        await _runWorkerChunk(
+          scenario: scenario,
+          iterations: chunkIterations,
+          warmup: first ? scenario.warmup : 0,
+        ),
+      );
+      remaining -= chunkIterations;
+      first = false;
+    }
+
+    results.add(mergeScenarioChunks(scenario, chunks));
   }
 
-  // 清理资源，确保数据被释放
-  blocks.clear();
+  return BenchmarkRun(
+    generatedAtUtc: DateTime.now().toUtc(),
+    environment: environment,
+    scenarios: results,
+  );
+}
+
+Future<BenchmarkScenarioResult> _runWorkerChunk({
+  required BenchmarkScenario scenario,
+  required int iterations,
+  required int warmup,
+}) async {
+  final scriptPath = Platform.script.toFilePath();
+  final workerArgs = <String>[
+    'run',
+    scriptPath,
+    '--worker',
+    '--scenario=${scenario.name}',
+    '--iterations=$iterations',
+    '--warmup=$warmup',
+    '--no-color',
+  ];
+
+  final result = await Process.run(
+    Platform.resolvedExecutable,
+    workerArgs,
+    workingDirectory: Directory.current.path,
+  );
+
+  if (result.exitCode != 0) {
+    final stdoutText = '${result.stdout}'.trim();
+    final stderrText = '${result.stderr}'.trim();
+    throw StateError(
+      'Benchmark worker failed for ${scenario.name} '
+      '(exit ${result.exitCode}).\nSTDOUT:\n$stdoutText\nSTDERR:\n$stderrText',
+    );
+  }
+
+  final stdoutText = '${result.stdout}';
+  final marker = 'WORKER_RESULT_JSON=';
+  final line = stdoutText
+      .split('\n')
+      .map((entry) => entry.trim())
+      .firstWhere((entry) => entry.startsWith(marker), orElse: () => '');
+
+  if (line.isEmpty) {
+    throw StateError(
+      'Benchmark worker did not return result for ${scenario.name}. '
+      'STDOUT:\n$stdoutText',
+    );
+  }
+
+  final payload = line.substring(marker.length);
+  final decoded = jsonDecode(payload);
+  if (decoded is Map<String, Object?>) {
+    return BenchmarkScenarioResult.fromJson(decoded);
+  }
+  if (decoded is Map) {
+    return BenchmarkScenarioResult.fromJson(decoded.cast<String, Object?>());
+  }
+  throw StateError('Unexpected worker payload for ${scenario.name}.');
+}
+
+int _parseIntArg(String? raw, {required int fallback}) {
+  if (raw == null) {
+    return fallback;
+  }
+  final parsed = int.tryParse(raw);
+  if (parsed == null || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
 }

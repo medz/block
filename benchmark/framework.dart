@@ -1,218 +1,571 @@
-// Copyright (c) 2023, the Block project authors.
-// Please see the AUTHORS file for details. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
-
-import 'dart:typed_data';
+import 'dart:io';
 import 'dart:math';
-import 'package:benchmark_harness/benchmark_harness.dart';
-import 'package:block/block.dart';
+import 'dart:typed_data';
 
-/// 定义内存使用基准测试接口
-abstract class MemoryBenchmark extends BenchmarkBase {
-  /// 内存使用点记录
-  final List<int> _memoryPoints = [];
+import 'package:coal/coal.dart';
 
-  /// 保存当前测试的 Block 对象，防止垃圾回收
-  final List<Block> _benchmarkBlocks = [];
+typedef BenchmarkCallback = Future<void> Function();
 
-  /// 创建内存基准测试
-  MemoryBenchmark(super.name);
+final class BenchmarkScenario {
+  BenchmarkScenario({
+    required this.name,
+    required this.category,
+    required this.iterations,
+    required this.action,
+    this.warmup = 2,
+    this.bytesPerIteration,
+    this.maxIterationsPerProcess,
+  });
 
-  @override
-  void setup() {
-    // 重置数据去重统计
-    Block.resetDataDeduplication();
-
-    // 记录初始内存使用量
-    _memoryPoints.clear();
-    _memoryPoints.add(Block.totalMemoryUsage);
-
-    // 清空 Block 引用列表
-    _benchmarkBlocks.clear();
-  }
-
-  /// 添加 Block 对象到引用列表，防止垃圾回收
-  void addBlockReference(Block block) {
-    _benchmarkBlocks.add(block);
-  }
-
-  /// 记录当前内存使用点
-  void recordMemoryPoint() {
-    _memoryPoints.add(Block.totalMemoryUsage);
-  }
-
-  @override
-  void teardown() {
-    // 强制更新内存统计
-    Block.forceUpdateMemoryStatistics();
-
-    // 确保在结束时记录内存点
-    recordMemoryPoint();
-
-    // 打印内存使用情况
-    print('DEBUG: Memory Usage: ${Block.totalMemoryUsage} bytes');
-    print('DEBUG: Active Blocks: ${Block.activeBlockCount}');
-    print(
-      'DEBUG: Peak Memory: ${_memoryPoints.isNotEmpty ? _memoryPoints.reduce((a, b) => a > b ? a : b) : 0} bytes',
+  factory BenchmarkScenario.sync({
+    required String name,
+    required String category,
+    required int iterations,
+    required void Function() action,
+    int warmup = 2,
+    int? bytesPerIteration,
+    int? maxIterationsPerProcess,
+  }) {
+    return BenchmarkScenario(
+      name: name,
+      category: category,
+      iterations: iterations,
+      warmup: warmup,
+      bytesPerIteration: bytesPerIteration,
+      maxIterationsPerProcess: maxIterationsPerProcess,
+      action: () async {
+        action();
+      },
     );
-    print('DEBUG: Data Deduplication:');
-    print(
-      'DEBUG:   Duplicate Count: ${Block.getDataDeduplicationDuplicateCount()}',
-    );
-    print(
-      'DEBUG:   Saved Memory: ${Block.getDataDeduplicationSavedMemory()} bytes',
-    );
-
-    // 清空 Block 引用，允许垃圾回收
-    _benchmarkBlocks.clear();
-
-    // 子类应在调用super.teardown()之前清理自己的资源
-    super.teardown();
   }
 
-  /// 获取内存使用情况
-  int get memoryUsage {
-    return _memoryPoints.isNotEmpty ? _memoryPoints.last : 0;
-  }
+  final String name;
+  final String category;
+  final int iterations;
+  final int warmup;
+  final int? bytesPerIteration;
+  final int? maxIterationsPerProcess;
+  final BenchmarkCallback action;
+}
 
-  /// 获取最大内存使用量
-  int get peakMemoryUsage {
-    if (_memoryPoints.isEmpty) {
-      return 0;
+final class BenchmarkScenarioResult {
+  BenchmarkScenarioResult({
+    required this.name,
+    required this.category,
+    required this.iterations,
+    required this.warmup,
+    required this.totalUs,
+    required this.avgUs,
+    required this.p50Us,
+    required this.p95Us,
+    required this.p99Us,
+    required this.tempFilesBefore,
+    required this.tempFilesAfter,
+    required this.tempFilesDelta,
+    required this.rssBeforeBytes,
+    required this.rssAfterBytes,
+    required this.rssPeakBytes,
+    this.samplesUs = const <double>[],
+    this.bytesPerIteration,
+  });
+
+  final String name;
+  final String category;
+  final int iterations;
+  final int warmup;
+  final double totalUs;
+  final double avgUs;
+  final double p50Us;
+  final double p95Us;
+  final double p99Us;
+  final int? bytesPerIteration;
+  final int tempFilesBefore;
+  final int tempFilesAfter;
+  final int tempFilesDelta;
+  final int rssBeforeBytes;
+  final int rssAfterBytes;
+  final int rssPeakBytes;
+  final List<double> samplesUs;
+
+  double? get throughputBytesPerSecond {
+    if (bytesPerIteration == null || totalUs <= 0) {
+      return null;
     }
-    return _memoryPoints.reduce((a, b) => a > b ? a : b);
+    final totalBytes = bytesPerIteration! * iterations;
+    final seconds = totalUs / 1000000.0;
+    return totalBytes / seconds;
+  }
+
+  double? get tempFilesPerIteration {
+    if (iterations <= 0) {
+      return null;
+    }
+    return tempFilesDelta / iterations;
+  }
+
+  Map<String, Object?> toJson() {
+    return {
+      'name': name,
+      'category': category,
+      'iterations': iterations,
+      'warmup': warmup,
+      'total_us': totalUs,
+      'avg_us': avgUs,
+      'p50_us': p50Us,
+      'p95_us': p95Us,
+      'p99_us': p99Us,
+      'temp_files_before': tempFilesBefore,
+      'temp_files_after': tempFilesAfter,
+      'temp_files_delta': tempFilesDelta,
+      'rss_before_bytes': rssBeforeBytes,
+      'rss_after_bytes': rssAfterBytes,
+      'rss_peak_bytes': rssPeakBytes,
+      'samples_us': samplesUs,
+      'bytes_per_iteration': bytesPerIteration,
+    };
+  }
+
+  factory BenchmarkScenarioResult.fromJson(Map<String, Object?> json) {
+    final rawSamples = json['samples_us'];
+    final samples = <double>[];
+    if (rawSamples is List<Object?>) {
+      for (final sample in rawSamples) {
+        if (sample is num) {
+          samples.add(sample.toDouble());
+        }
+      }
+    }
+
+    return BenchmarkScenarioResult(
+      name: _readString(json, 'name'),
+      category: _readString(json, 'category'),
+      iterations: _readInt(json, 'iterations'),
+      warmup: _readInt(json, 'warmup'),
+      totalUs: _readDouble(json, 'total_us'),
+      avgUs: _readDouble(json, 'avg_us'),
+      p50Us: _readDouble(json, 'p50_us'),
+      p95Us: _readDouble(json, 'p95_us'),
+      p99Us: _readDouble(json, 'p99_us'),
+      tempFilesBefore: _readInt(json, 'temp_files_before'),
+      tempFilesAfter: _readInt(json, 'temp_files_after'),
+      tempFilesDelta: _readInt(json, 'temp_files_delta'),
+      rssBeforeBytes: _readInt(json, 'rss_before_bytes'),
+      rssAfterBytes: _readInt(json, 'rss_after_bytes'),
+      rssPeakBytes: _readInt(json, 'rss_peak_bytes'),
+      samplesUs: samples,
+      bytesPerIteration: _readNullableInt(json, 'bytes_per_iteration'),
+    );
   }
 }
 
-/// 生成测试数据
-class TestDataGenerator {
-  /// 生成指定大小的随机数据
-  static Uint8List generateRandomData(int size) {
-    final data = Uint8List(size);
-    final random = Random();
-    for (int i = 0; i < size; i++) {
-      data[i] = random.nextInt(256);
-    }
-    return data;
+final class BenchmarkEnvironment {
+  BenchmarkEnvironment({
+    required this.os,
+    required this.osVersion,
+    required this.dartVersion,
+    required this.cpuCount,
+    required this.tempDirectory,
+  });
+
+  factory BenchmarkEnvironment.capture() {
+    return BenchmarkEnvironment(
+      os: Platform.operatingSystem,
+      osVersion: Platform.operatingSystemVersion,
+      dartVersion: Platform.version,
+      cpuCount: Platform.numberOfProcessors,
+      tempDirectory: Directory.systemTemp.path,
+    );
   }
 
-  /// 生成指定大小的顺序数据
-  static Uint8List generateSequentialData(int size) {
-    final data = Uint8List(size);
-    for (int i = 0; i < size; i++) {
-      data[i] = i % 256;
-    }
-    return data;
-  }
-
-  /// 生成特定模式的数据以最大化数据去重
-  static Uint8List generateDuplicateData(int size, int patternSize) {
-    final pattern = Uint8List(patternSize);
-    for (int i = 0; i < patternSize; i++) {
-      pattern[i] = i % 256;
-    }
-
-    final data = Uint8List(size);
-    for (int i = 0; i < size; i++) {
-      data[i] = pattern[i % patternSize];
-    }
-    return data;
-  }
-
-  /// 生成一个包含多个相同块的Block
-  static Block generateBlockWithDuplicates(int blockCount, int blockSize) {
-    final sharedData = generateSequentialData(blockSize);
-    final List<Uint8List> blocks = List.generate(blockCount, (_) => sharedData);
-    return Block(blocks);
-  }
+  final String os;
+  final String osVersion;
+  final String dartVersion;
+  final int cpuCount;
+  final String tempDirectory;
 }
 
-/// 打印基准测试结果表格
-void printBenchmarkResultsTable(List<BenchmarkBase> benchmarks) {
-  print('');
+final class BenchmarkRun {
+  BenchmarkRun({
+    required this.generatedAtUtc,
+    required this.environment,
+    required this.scenarios,
+  });
+
+  final DateTime generatedAtUtc;
+  final BenchmarkEnvironment environment;
+  final List<BenchmarkScenarioResult> scenarios;
+}
+
+Future<BenchmarkScenarioResult> runScenario(BenchmarkScenario scenario) async {
+  const tempPrefix = 'block_io_';
+  final tempFilesBefore = _countTempFilesWithPrefix(tempPrefix);
+  final rssBefore = _safeCurrentRss();
+  var rssPeak = rssBefore;
+
+  for (var i = 0; i < scenario.warmup; i++) {
+    await scenario.action();
+    final rssNow = _safeCurrentRss();
+    if (rssNow > rssPeak) {
+      rssPeak = rssNow;
+    }
+  }
+
+  final iterationUs = <double>[];
+  for (var i = 0; i < scenario.iterations; i++) {
+    final watch = Stopwatch()..start();
+    await scenario.action();
+    watch.stop();
+    iterationUs.add(watch.elapsedMicroseconds.toDouble());
+
+    final rssNow = _safeCurrentRss();
+    if (rssNow > rssPeak) {
+      rssPeak = rssNow;
+    }
+  }
+
+  final totalUs = iterationUs.fold<double>(0, (sum, current) => sum + current);
+  final sortedLatencies = iterationUs.toList()..sort();
+  final tempFilesAfter = _countTempFilesWithPrefix(tempPrefix);
+  final rssAfter = _safeCurrentRss();
+
+  return BenchmarkScenarioResult(
+    name: scenario.name,
+    category: scenario.category,
+    iterations: scenario.iterations,
+    warmup: scenario.warmup,
+    totalUs: totalUs,
+    avgUs: scenario.iterations == 0 ? 0 : totalUs / scenario.iterations,
+    p50Us: _percentile(sortedLatencies, 0.50),
+    p95Us: _percentile(sortedLatencies, 0.95),
+    p99Us: _percentile(sortedLatencies, 0.99),
+    bytesPerIteration: scenario.bytesPerIteration,
+    tempFilesBefore: tempFilesBefore,
+    tempFilesAfter: tempFilesAfter,
+    tempFilesDelta: tempFilesAfter - tempFilesBefore,
+    rssBeforeBytes: rssBefore,
+    rssAfterBytes: rssAfter,
+    rssPeakBytes: rssPeak,
+    samplesUs: iterationUs,
+  );
+}
+
+BenchmarkScenarioResult mergeScenarioChunks(
+  BenchmarkScenario scenario,
+  List<BenchmarkScenarioResult> chunks,
+) {
+  if (chunks.isEmpty) {
+    throw ArgumentError.value(chunks, 'chunks', 'must not be empty');
+  }
+
+  final combinedSamples = <double>[];
+  var iterations = 0;
+  var warmup = 0;
+  var totalUs = 0.0;
+  var tempFilesDelta = 0;
+  var rssPeak = chunks.first.rssPeakBytes;
+
+  for (final chunk in chunks) {
+    iterations += chunk.iterations;
+    warmup += chunk.warmup;
+    totalUs += chunk.totalUs;
+    tempFilesDelta += chunk.tempFilesDelta;
+    combinedSamples.addAll(chunk.samplesUs);
+    if (chunk.rssPeakBytes > rssPeak) {
+      rssPeak = chunk.rssPeakBytes;
+    }
+  }
+
+  final sorted = combinedSamples.toList()..sort();
+  final avgUs = iterations == 0 ? 0.0 : totalUs / iterations;
+
+  return BenchmarkScenarioResult(
+    name: scenario.name,
+    category: scenario.category,
+    iterations: iterations,
+    warmup: warmup,
+    totalUs: totalUs,
+    avgUs: avgUs,
+    p50Us: _percentile(sorted, 0.50),
+    p95Us: _percentile(sorted, 0.95),
+    p99Us: _percentile(sorted, 0.99),
+    tempFilesBefore: chunks.first.tempFilesBefore,
+    tempFilesAfter: chunks.last.tempFilesAfter,
+    tempFilesDelta: tempFilesDelta,
+    rssBeforeBytes: chunks.first.rssBeforeBytes,
+    rssAfterBytes: chunks.last.rssAfterBytes,
+    rssPeakBytes: rssPeak,
+    samplesUs: combinedSamples,
+    bytesPerIteration: scenario.bytesPerIteration,
+  );
+}
+
+Future<BenchmarkRun> runBenchmarks(List<BenchmarkScenario> scenarios) async {
+  final environment = BenchmarkEnvironment.capture();
+  final results = <BenchmarkScenarioResult>[];
+
+  for (final scenario in scenarios) {
+    results.add(await runScenario(scenario));
+  }
+
+  return BenchmarkRun(
+    generatedAtUtc: DateTime.now().toUtc(),
+    environment: environment,
+    scenarios: results,
+  );
+}
+
+void printBenchmarkReport(BenchmarkRun run, {bool useColors = true}) {
+  final colorsEnabled = useColors && stdout.supportsAnsiEscapes;
+  String paint(String text, Iterable<TextStyle> styles) {
+    if (!colorsEnabled) {
+      return text;
+    }
+    return styleText(text, styles);
+  }
+
+  final timestamp = run.generatedAtUtc.toIso8601String();
+  print(paint('Block benchmark run @ $timestamp', [TextStyle.bold]));
   print(
-    '| Benchmark | Score (μs) | Memory Usage (bytes) | Saved Memory (bytes) |',
+    '${paint('OS', [TextStyle.cyan])}: ${run.environment.os} ${run.environment.osVersion}',
   );
-  print(
-    '|-----------|------------|----------------------|----------------------|',
-  );
+  print('${paint('Dart', [TextStyle.cyan])}: ${run.environment.dartVersion}');
+  print('${paint('CPUs', [TextStyle.cyan])}: ${run.environment.cpuCount}');
 
-  for (final benchmark in benchmarks) {
-    final score = benchmark.measure();
-    final memoryUsage =
-        benchmark is MemoryBenchmark ? '${benchmark.peakMemoryUsage}' : 'N/A';
-    final savedMemory =
-        benchmark is MemoryBenchmark
-            ? '${Block.getDataDeduplicationSavedMemory()}'
-            : 'N/A';
+  final byCategory = <String, List<BenchmarkScenarioResult>>{};
+  for (final scenario in run.scenarios) {
+    byCategory
+        .putIfAbsent(scenario.category, () => <BenchmarkScenarioResult>[])
+        .add(scenario);
+  }
+
+  for (final entry in byCategory.entries) {
     print(
-      '| ${benchmark.name} | ${score.toStringAsFixed(2)} | $memoryUsage | $savedMemory |',
+      '\n${paint('=== ${entry.key} ===', [TextStyle.bold, TextStyle.green])}',
     );
+    const headers = <String>[
+      'scenario',
+      'iters',
+      'avg',
+      'p95',
+      'throughput',
+      'temp/iter',
+      'rss_peak',
+    ];
+    final rows = <List<String>>[];
+
+    for (final scenario in entry.value) {
+      final throughput = scenario.throughputBytesPerSecond == null
+          ? '-'
+          : _formatRateBinary(scenario.throughputBytesPerSecond!);
+      final tempPerIteration = scenario.tempFilesPerIteration == null
+          ? '-'
+          : scenario.tempFilesPerIteration!.toStringAsFixed(4);
+      final rssPeak = scenario.rssPeakBytes < 0
+          ? '-'
+          : _formatBytesBinary(scenario.rssPeakBytes.toDouble());
+
+      rows.add(<String>[
+        scenario.name,
+        '${scenario.iterations}',
+        _formatLatencyFromUs(scenario.avgUs),
+        _formatLatencyFromUs(scenario.p95Us),
+        throughput,
+        tempPerIteration,
+        rssPeak,
+      ]);
+    }
+
+    final widths = _computeColumnWidths(headers, rows);
+    final divider = _tableDivider(widths);
+    const rightAlignedColumns = <int>{1, 2, 3, 4, 5, 6};
+
+    print(divider);
+    print(_tableLine(headers, widths));
+    print(divider);
+    for (final row in rows) {
+      print(_tableLine(row, widths, rightAlignedColumns: rightAlignedColumns));
+    }
+    print(divider);
   }
 }
 
-/// 运行所有基准测试
-void runAllBenchmarks(List<BenchmarkBase> benchmarks) {
-  print('=== 运行基准测试 ===');
-  print('');
+List<int> _computeColumnWidths(List<String> headers, List<List<String>> rows) {
+  final widths = headers.map((header) => header.length).toList();
+  for (final row in rows) {
+    for (var i = 0; i < row.length; i++) {
+      if (row[i].length > widths[i]) {
+        widths[i] = row[i].length;
+      }
+    }
+  }
+  return widths;
+}
 
-  // 设置内存使用限制，让系统更早地响应内存压力
-  // 默认设置为256MB，可以根据实际情况调整
-  Block.setMemoryUsageLimit(256 * 1024 * 1024);
-  
-  // 启动内存监控，每1秒检查一次内存使用情况
-  final stopMonitor = Block.startMemoryMonitor(
-    intervalMs: 1000,
-    memoryLimit: 256 * 1024 * 1024,
-  );
-  
-  // 订阅高内存压力通知
-  final cancelHighPressure = Block.onMemoryPressureLevel(() {
-    print('\n警告: 检测到高内存压力');
-    print('当前内存使用: ${Block.totalMemoryUsage ~/ (1024 * 1024)}MB');
-    print('正在自动清理内存...\n');
-  }, level: MemoryPressureLevel.high);
+String _tableDivider(List<int> widths) {
+  final segments = widths.map((width) => ''.padLeft(width, '-'));
+  return '+-${segments.join('-+-')}-+';
+}
 
-  // 订阅危机内存压力通知
-  final cancelCriticalPressure = Block.onMemoryPressureLevel(() {
-    print('\n警告: 检测到危急内存压力！');
-    print('当前内存使用: ${Block.totalMemoryUsage ~/ (1024 * 1024)}MB');
-    print('进行紧急内存清理...\n');
-    // 强制清理内存
-    final freedBytes = Block.reduceMemoryUsage();
-    print('已释放 ${freedBytes ~/ 1024}KB 内存\n');
-  }, level: MemoryPressureLevel.critical);
+String _tableLine(
+  List<String> cells,
+  List<int> widths, {
+  Set<int> rightAlignedColumns = const <int>{},
+}) {
+  final formatted = <String>[];
+  for (var i = 0; i < cells.length; i++) {
+    final cell = cells[i];
+    final width = widths[i];
+    final value = rightAlignedColumns.contains(i)
+        ? cell.padLeft(width)
+        : cell.padRight(width);
+    formatted.add(value);
+  }
+  return '| ${formatted.join(' | ')} |';
+}
 
-  // 运行所有基准测试
-  for (final benchmark in benchmarks) {
-    benchmark.report();
+String _formatLatencyFromUs(double microseconds) {
+  if (microseconds >= 1000000) {
+    return '${(microseconds / 1000000).toStringAsFixed(2)} s';
+  }
+  if (microseconds >= 1000) {
+    return '${(microseconds / 1000).toStringAsFixed(2)} ms';
+  }
+  return '${microseconds.toStringAsFixed(2)} us';
+}
+
+String _formatRateBinary(double bytesPerSecond) {
+  return '${_formatBinaryMagnitude(bytesPerSecond)}/s';
+}
+
+String _formatBytesBinary(double bytes) {
+  return _formatBinaryMagnitude(bytes);
+}
+
+String _formatBinaryMagnitude(double value) {
+  const units = <String>['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  var scaled = value;
+  var unitIndex = 0;
+
+  while (scaled >= 1024 && unitIndex < units.length - 1) {
+    scaled /= 1024;
+    unitIndex++;
   }
 
-  // 运行完成后，打印基准测试结果表格
-  printBenchmarkResultsTable(benchmarks);
+  final decimals = scaled >= 100 ? 0 : 2;
+  return '${scaled.toStringAsFixed(decimals)} ${units[unitIndex]}';
+}
 
-  // 打印内存使用统计
-  final memReport = Block.getGlobalMemoryReport();
-  print('\n内存使用统计:');
-  print('总内存使用: ${memReport['totalMemoryUsage'] ~/ 1024} KB');
-  print('活跃Block数量: ${memReport['activeBlockCount']}');
-  print('平均每个Block内存: ${memReport['averageBlockMemory'] ~/ 1024} KB');
-  
-  // 打印数据去重统计
-  final dedupeReport = Block.getDataDeduplicationReport();
-  print('\n数据去重统计:');
-  print('唯一Block数量: ${dedupeReport['uniqueBlockCount']}');
-  print('总字节数: ${dedupeReport['totalBytes'] ~/ 1024} KB');
-  print('总引用计数: ${dedupeReport['totalRefCount']}');
-  print('重复Block数量: ${dedupeReport['duplicateBlockCount']}');
-  print('总节省内存: ${dedupeReport['totalSavedMemory'] ~/ 1024} KB');
+Uint8List makeSequentialBytes(int size) {
+  final data = Uint8List(size);
+  for (var i = 0; i < size; i++) {
+    data[i] = i & 0xFF;
+  }
+  return data;
+}
 
-  // 清理内存压力订阅和监控器
-  cancelHighPressure();
-  cancelCriticalPressure();
-  stopMonitor();
-  
-  // 移除内存限制
-  Block.setMemoryUsageLimit(null);
+String makeText(int size) {
+  final chars = List<int>.generate(size, (i) => 65 + (i % 26));
+  return String.fromCharCodes(chars);
+}
+
+int clampIterationsBySize(
+  int bytes, {
+  int minIterations = 5,
+  int maxIterations = 1000,
+}) {
+  final rough = max(1, (16 * 1024 * 1024) ~/ max(1, bytes));
+  return rough.clamp(minIterations, maxIterations);
+}
+
+double _percentile(List<double> sorted, double percentile) {
+  if (sorted.isEmpty) {
+    return 0;
+  }
+  final rank = percentile * (sorted.length - 1);
+  final lowerIndex = rank.floor();
+  final upperIndex = rank.ceil();
+  if (lowerIndex == upperIndex) {
+    return sorted[lowerIndex];
+  }
+
+  final lower = sorted[lowerIndex];
+  final upper = sorted[upperIndex];
+  final weight = rank - lowerIndex;
+  return lower + (upper - lower) * weight;
+}
+
+int _safeCurrentRss() {
+  try {
+    return ProcessInfo.currentRss;
+  } catch (_) {
+    return -1;
+  }
+}
+
+int _countTempFilesWithPrefix(String prefix) {
+  try {
+    final entities = Directory.systemTemp.listSync(followLinks: false);
+    var count = 0;
+    for (final entity in entities) {
+      final name = _basename(entity.path);
+      if (name.startsWith(prefix)) {
+        count++;
+      }
+    }
+    return count;
+  } catch (_) {
+    return -1;
+  }
+}
+
+String _basename(String path) {
+  final separatorIndex = path.lastIndexOf(Platform.pathSeparator);
+  if (separatorIndex < 0 || separatorIndex == path.length - 1) {
+    return path;
+  }
+  return path.substring(separatorIndex + 1);
+}
+
+String _readString(Map<String, Object?> json, String key) {
+  final value = json[key];
+  if (value is String) {
+    return value;
+  }
+  throw FormatException('Expected "$key" to be String.');
+}
+
+int _readInt(Map<String, Object?> json, String key) {
+  final value = json[key];
+  if (value is int) {
+    return value;
+  }
+  if (value is num) {
+    return value.toInt();
+  }
+  throw FormatException('Expected "$key" to be int.');
+}
+
+double _readDouble(Map<String, Object?> json, String key) {
+  final value = json[key];
+  if (value is double) {
+    return value;
+  }
+  if (value is num) {
+    return value.toDouble();
+  }
+  throw FormatException('Expected "$key" to be double.');
+}
+
+int? _readNullableInt(Map<String, Object?> json, String key) {
+  final value = json[key];
+  if (value == null) {
+    return null;
+  }
+  if (value is int) {
+    return value;
+  }
+  if (value is num) {
+    return value.toInt();
+  }
+  throw FormatException('Expected "$key" to be int?.');
 }

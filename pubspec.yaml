@@ -1,19 +1,23 @@
 name: block
-description: A flexible and efficient binary data handling library for Dart with segmented storage, zero-copy slices, and streaming support for optimal memory usage.
-version: 0.0.4
+description: Blob-compatible binary data blocks with platform-optimized implementations for web and io.
+version: 1.0.0
 repository: https://github.com/medz/block
 
 topics:
   - binary
-  - streams
-  - data
   - blob
-  - block
+  - streams
+  - web
+  - io
 
 environment:
-  sdk: ^3.7.0
+  sdk: ^3.10.0
+
+dependencies:
+  web: ^1.1.1
 
 dev_dependencies:
-  lints: ^5.0.0
-  test: ^1.24.0
-  benchmark_harness: ^2.2.2
+  lints: ^6.1.0
+  test: ^1.29.0
+  benchmark_harness: ^2.4.0
+  coal: ^0.0.6
