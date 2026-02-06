@@ -17,13 +17,20 @@ void main() {
 
     final block = Block(<Object>[source], type: 'application/octet-stream');
     expect(blockImplementation(block), equals('io'));
+    expect(ioBackingIdentity(block), isNull);
 
     final smallSlice = block.slice(0, 1024);
     final largeSlice = block.slice(0, 128 * 1024);
+    expect(ioBackingIdentity(smallSlice), isNull);
+    expect(ioBackingIdentity(largeSlice), isNull);
 
+    await smallSlice.arrayBuffer();
+    expect(ioBackingIdentity(smallSlice), isNotNull);
+    expect(ioBackingIdentity(block), isNull);
+
+    await largeSlice.arrayBuffer();
     final parentBacking = ioBackingIdentity(block);
     expect(parentBacking, isNotNull);
-
     expect(ioBackingIdentity(smallSlice), isNot(equals(parentBacking)));
     expect(ioBackingIdentity(largeSlice), equals(parentBacking));
 

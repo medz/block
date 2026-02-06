@@ -123,13 +123,13 @@ final class _WebBlock implements Block {
       return bytes.toJS;
     }
 
-    if (part is _WebBlock) {
-      return part._blob;
-    }
-
     if (part is Block) {
+      if (part is _WebBlock) {
+        return part._blob;
+      }
       throw ArgumentError(
-        'Unsupported Block implementation ${part.runtimeType} on web platform.',
+        'Unsupported Block implementation ${part.runtimeType} on web platform. '
+        'Use Block instances created by this package on the same platform.',
       );
     }
 
