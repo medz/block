@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -11,66 +12,6 @@ const int _sliceCopyThreshold = 64 * 1024;
 
 Block createIoBlock(List<Object> parts, {String type = ''}) {
   return _IoComposedBlock._fromParts(parts, type: type);
-}
-
-Map<String, Object?> ioDebugMetadata(Block block) {
-  if (block is _IoBlock) {
-    return _debugMaterializedIoBlock(block);
-  }
-
-  if (block is _IoComposedBlock) {
-    final materialized = block._materialized;
-    if (materialized != null) {
-      return _debugMaterializedIoBlock(
-        materialized,
-        reportedLength: block._length,
-      );
-    }
-
-    return {
-      'implementation': 'io',
-      'backingPath': null,
-      'backingIdentity': null,
-      'offset': null,
-      'length': block._length,
-    };
-  }
-
-  if (block is _IoDeferredSliceBlock) {
-    final resolved = block._resolved;
-    if (resolved != null) {
-      return _debugMaterializedIoBlock(resolved, reportedLength: block._length);
-    }
-
-    return {
-      'implementation': 'io',
-      'backingPath': null,
-      'backingIdentity': null,
-      'offset': null,
-      'length': block._length,
-    };
-  }
-
-  return const {
-    'implementation': 'unknown',
-    'backingPath': null,
-    'backingIdentity': null,
-    'offset': null,
-    'length': null,
-  };
-}
-
-Map<String, Object?> _debugMaterializedIoBlock(
-  _IoBlock block, {
-  int? reportedLength,
-}) {
-  return {
-    'implementation': 'io',
-    'backingPath': block._backing.file.path,
-    'backingIdentity': identityHashCode(block._backing),
-    'offset': block._offset,
-    'length': reportedLength ?? block._length,
-  };
 }
 
 final class _IoCleanupToken {
@@ -110,15 +51,60 @@ final class _IoBacking {
   final RandomAccessFile handle;
   final int totalSize;
 
-  static _IoBacking fromBytes(Uint8List bytes) {
+  Future<void> _pending = Future<void>.value();
+
+  static Future<_IoBacking> fromBytes(Uint8List bytes) {
+    return fromChunks(Stream<Uint8List>.value(bytes), bytes.length);
+  }
+
+  static Future<_IoBacking> fromChunks(
+    Stream<Uint8List> chunks,
+    int totalSize,
+  ) async {
     final path = _buildTempPath();
     final file = File(path);
-    final handle = file.openSync(mode: FileMode.write);
-    if (bytes.isNotEmpty) {
-      handle.writeFromSync(bytes);
+    RandomAccessFile? handle;
+
+    try {
+      handle = await file.open(mode: FileMode.write);
+      var written = 0;
+
+      await for (final chunk in chunks) {
+        if (chunk.isEmpty) {
+          continue;
+        }
+        await handle.writeFrom(chunk);
+        written += chunk.length;
+      }
+
+      if (written != totalSize) {
+        throw StateError(
+          'Unexpected write size for ${file.path}. Expected $totalSize, '
+          'actual $written.',
+        );
+      }
+
+      await handle.setPosition(0);
+      return _IoBacking._(file, handle, totalSize);
+    } catch (_) {
+      if (handle != null) {
+        try {
+          await handle.close();
+        } catch (_) {
+          // best-effort cleanup.
+        }
+      }
+
+      try {
+        if (await file.exists()) {
+          await file.delete();
+        }
+      } catch (_) {
+        // best-effort cleanup.
+      }
+
+      rethrow;
     }
-    handle.setPositionSync(0);
-    return _IoBacking._(file, handle, bytes.length);
   }
 
   static String _buildTempPath() {
@@ -128,31 +114,51 @@ final class _IoBacking {
     return '${Directory.systemTemp.path}$separator$ioTempFilePrefix${now}_$nonce.tmp';
   }
 
-  Uint8List readRangeSync(int offset, int length) {
-    if (offset < 0 || length < 0 || offset + length > totalSize) {
-      throw RangeError.range(offset + length, 0, totalSize, 'offset/length');
-    }
-
+  Future<Uint8List> readRange(int offset, int length) {
+    _validateRange(totalSize, offset, length);
     if (length == 0) {
-      return Uint8List(0);
+      return Future<Uint8List>.value(Uint8List(0));
     }
 
-    handle.setPositionSync(offset);
-    final bytes = handle.readSync(length);
-    if (bytes.length != length) {
-      throw StateError(
-        'Unexpected end of file while reading $length bytes from ${file.path}.',
-      );
+    return _enqueue(() async {
+      await handle.setPosition(offset);
+      final bytes = await handle.read(length);
+      if (bytes.length != length) {
+        throw StateError(
+          'Unexpected end of file while reading $length bytes from '
+          '${file.path}.',
+        );
+      }
+      return bytes;
+    });
+  }
+
+  Future<T> _enqueue<T>(Future<T> Function() action) {
+    final completer = Completer<T>();
+
+    Future<void> runAction() async {
+      try {
+        completer.complete(await action());
+      } catch (error, stackTrace) {
+        completer.completeError(error, stackTrace);
+      }
     }
 
-    return bytes;
+    _pending = _pending.then<void>(
+      (_) => runAction(),
+      onError: (Object error, StackTrace stackTrace) => runAction(),
+    );
+
+    return completer.future;
   }
 }
 
 abstract interface class _IoReadable {
   int get size;
 
-  Uint8List _readRangeSync(int offset, int length);
+  Future<Uint8List> readRange(int offset, int length);
+
+  Future<_IoBlock> ensureMaterialized();
 }
 
 final class _IoBlock implements Block, _IoReadable {
@@ -172,68 +178,54 @@ final class _IoBlock implements Block, _IoReadable {
   @override
   Block slice(int start, [int? end, String? contentType]) {
     final bounds = normalizeSliceBounds(_length, start, end);
-    final sliceLength = bounds.length;
-    final nextType = contentType ?? '';
-
-    if (sliceLength <= _sliceCopyThreshold) {
-      final copied = _backing.readRangeSync(
-        _offset + bounds.start,
-        sliceLength,
-      );
-      final copiedBacking = _IoBacking.fromBytes(copied);
-      return _IoBlock._(copiedBacking, 0, sliceLength, nextType);
-    }
-
-    return _IoBlock._(_backing, _offset + bounds.start, sliceLength, nextType);
+    return _IoDeferredSliceBlock._fromSource(
+      this,
+      bounds.start,
+      bounds.length,
+      contentType ?? '',
+    );
   }
 
   @override
-  Future<Uint8List> arrayBuffer() async => _readViewSync();
+  Future<Uint8List> arrayBuffer() => readRange(0, _length);
 
   @override
-  Future<String> text() async => utf8.decode(_readViewSync());
+  Future<String> text() async => utf8.decode(await arrayBuffer());
 
   @override
   Stream<Uint8List> stream({
     int chunkSize = Block.defaultStreamChunkSize,
   }) async* {
-    if (chunkSize <= 0) {
-      throw ArgumentError.value(
-        chunkSize,
-        'chunkSize',
-        'must be greater than 0',
-      );
-    }
+    _validateChunkSize(chunkSize);
 
     var readOffset = 0;
     while (readOffset < _length) {
       final toRead = min(chunkSize, _length - readOffset);
-      yield _readRangeSync(readOffset, toRead);
+      yield await readRange(readOffset, toRead);
       readOffset += toRead;
     }
   }
 
-  Uint8List _readViewSync() => _readRangeSync(0, _length);
+  @override
+  Future<Uint8List> readRange(int offset, int length) {
+    _validateRange(_length, offset, length);
+    return _backing.readRange(_offset + offset, length);
+  }
 
   @override
-  Uint8List _readRangeSync(int offset, int length) {
-    if (offset < 0 || length < 0 || offset + length > _length) {
-      throw RangeError.range(offset + length, 0, _length, 'offset/length');
-    }
-    return _backing.readRangeSync(_offset + offset, length);
-  }
+  Future<_IoBlock> ensureMaterialized() => Future<_IoBlock>.value(this);
 }
 
 abstract base class _IoCompositePart {
   int get length;
 
-  Uint8List readRangeSync(int start, int length);
+  Future<Uint8List> readRange(int start, int length);
 
-  Uint8List readBytesSync() => readRangeSync(0, length);
+  Stream<Uint8List> stream();
 }
 
 final class _IoBytesPart extends _IoCompositePart {
-  _IoBytesPart(Uint8List bytes) : _bytes = Uint8List.fromList(bytes);
+  _IoBytesPart(this._bytes);
 
   final Uint8List _bytes;
 
@@ -241,12 +233,21 @@ final class _IoBytesPart extends _IoCompositePart {
   int get length => _bytes.length;
 
   @override
-  Uint8List readRangeSync(int start, int length) {
-    final end = start + length;
-    if (start < 0 || length < 0 || end > _bytes.length) {
-      throw RangeError.range(end, 0, _bytes.length, 'start/length');
+  Future<Uint8List> readRange(int start, int length) async {
+    _validateRange(_bytes.length, start, length);
+    if (length == 0) {
+      return Uint8List(0);
     }
+
+    final end = start + length;
     return Uint8List.fromList(_bytes.sublist(start, end));
+  }
+
+  @override
+  Stream<Uint8List> stream() async* {
+    if (_bytes.isNotEmpty) {
+      yield Uint8List.fromList(_bytes);
+    }
   }
 }
 
@@ -260,12 +261,41 @@ final class _IoReadablePart extends _IoCompositePart {
   final int length;
 
   @override
-  Uint8List readRangeSync(int start, int length) {
-    final end = start + length;
-    if (start < 0 || length < 0 || end > this.length) {
-      throw RangeError.range(end, 0, this.length, 'start/length');
+  Future<Uint8List> readRange(int start, int length) {
+    _validateRange(this.length, start, length);
+    return _source.readRange(_sourceOffset + start, length);
+  }
+
+  @override
+  Stream<Uint8List> stream() {
+    return _streamReadableRange(_source, _sourceOffset, length);
+  }
+}
+
+final class _IoForeignBlockPart extends _IoCompositePart {
+  _IoForeignBlockPart(this._block) : length = _block.size;
+
+  final Block _block;
+
+  @override
+  final int length;
+
+  @override
+  Future<Uint8List> readRange(int start, int length) {
+    _validateRange(this.length, start, length);
+    if (length == 0) {
+      return Future<Uint8List>.value(Uint8List(0));
     }
-    return _source._readRangeSync(_sourceOffset + start, length);
+
+    return _block.slice(start, start + length).arrayBuffer();
+  }
+
+  @override
+  Stream<Uint8List> stream() {
+    if (length == 0) {
+      return const Stream<Uint8List>.empty();
+    }
+    return _block.stream();
   }
 }
 
@@ -280,7 +310,9 @@ final class _IoComposedBlock implements Block, _IoReadable {
   final List<_IoCompositePart> _parts;
   final int _length;
   final String _type;
+
   _IoBlock? _materialized;
+  Future<_IoBlock>? _materializing;
 
   @override
   int get size => _length;
@@ -296,60 +328,79 @@ final class _IoComposedBlock implements Block, _IoReadable {
     }
 
     final bounds = normalizeSliceBounds(_length, start, end);
-    final sliceLength = bounds.length;
-    final nextType = contentType ?? '';
     return _IoDeferredSliceBlock._fromSource(
       this,
       bounds.start,
-      sliceLength,
-      nextType,
+      bounds.length,
+      contentType ?? '',
     );
   }
 
   @override
-  Future<Uint8List> arrayBuffer() => _ensureMaterializedSync().arrayBuffer();
-
-  @override
-  Future<String> text() => _ensureMaterializedSync().text();
-
-  @override
-  Stream<Uint8List> stream({int chunkSize = Block.defaultStreamChunkSize}) {
-    return _ensureMaterializedSync().stream(chunkSize: chunkSize);
+  Future<Uint8List> arrayBuffer() async {
+    final materialized = await ensureMaterialized();
+    return materialized.arrayBuffer();
   }
 
   @override
-  Uint8List _readRangeSync(int offset, int length) {
+  Future<String> text() async {
+    final materialized = await ensureMaterialized();
+    return materialized.text();
+  }
+
+  @override
+  Stream<Uint8List> stream({
+    int chunkSize = Block.defaultStreamChunkSize,
+  }) async* {
+    final materialized = await ensureMaterialized();
+    yield* materialized.stream(chunkSize: chunkSize);
+  }
+
+  @override
+  Future<Uint8List> readRange(int offset, int length) async {
     final materialized = _materialized;
     if (materialized != null) {
-      return materialized._readRangeSync(offset, length);
+      return materialized.readRange(offset, length);
     }
-    return _readRangeFromPartsSync(offset, length);
+    return _readRangeFromParts(offset, length);
   }
 
-  _IoBlock _ensureMaterializedSync() {
+  @override
+  Future<_IoBlock> ensureMaterialized() {
     final existing = _materialized;
     if (existing != null) {
-      return existing;
+      return Future<_IoBlock>.value(existing);
     }
 
-    final merged = Uint8List(_length);
-    var cursor = 0;
-    for (final part in _parts) {
-      final bytes = part.readBytesSync();
-      merged.setRange(cursor, cursor + bytes.length, bytes);
-      cursor += bytes.length;
+    final inFlight = _materializing;
+    if (inFlight != null) {
+      return inFlight;
     }
 
-    final backing = _IoBacking.fromBytes(merged);
-    final materialized = _IoBlock._(backing, 0, _length, _type);
-    _materialized = materialized;
-    return materialized;
+    final future = _materialize();
+    _materializing = future;
+    return future;
   }
 
-  Uint8List _readRangeFromPartsSync(int offset, int length) {
-    if (offset < 0 || length < 0 || offset + length > _length) {
-      throw RangeError.range(offset + length, 0, _length, 'offset/length');
+  Future<_IoBlock> _materialize() async {
+    try {
+      final backing = await _IoBacking.fromChunks(_streamAllParts(), _length);
+      final materialized = _IoBlock._(backing, 0, _length, _type);
+      _materialized = materialized;
+      return materialized;
+    } finally {
+      _materializing = null;
     }
+  }
+
+  Stream<Uint8List> _streamAllParts() async* {
+    for (final part in _parts) {
+      yield* part.stream();
+    }
+  }
+
+  Future<Uint8List> _readRangeFromParts(int offset, int length) async {
+    _validateRange(_length, offset, length);
     if (length == 0) {
       return Uint8List(0);
     }
@@ -372,7 +423,7 @@ final class _IoComposedBlock implements Block, _IoReadable {
       final localStart = remainingSkip;
       final available = part.length - localStart;
       final take = min(available, remainingLength);
-      final segment = part.readRangeSync(localStart, take);
+      final segment = await part.readRange(localStart, take);
       output.setRange(outputCursor, outputCursor + take, segment);
 
       outputCursor += take;
@@ -398,6 +449,7 @@ final class _IoComposedBlock implements Block, _IoReadable {
       if (normalizedPart.length == 0) {
         continue;
       }
+
       normalized.add(normalizedPart);
       totalSize += normalizedPart.length;
     }
@@ -410,7 +462,7 @@ final class _IoComposedBlock implements Block, _IoReadable {
 
   static _IoCompositePart _normalizePart(Object part) {
     if (part is String) {
-      return _IoBytesPart(Uint8List.fromList(utf8.encode(part)));
+      return _IoBytesPart(_utf8Bytes(part));
     }
 
     if (part is Uint8List) {
@@ -430,10 +482,7 @@ final class _IoComposedBlock implements Block, _IoReadable {
     }
 
     if (part is Block) {
-      throw ArgumentError(
-        'Unsupported Block implementation ${part.runtimeType} on io platform. '
-        'Use Block instances created by this package on the same platform.',
-      );
+      return _IoForeignBlockPart(part);
     }
 
     throw ArgumentError(
@@ -459,6 +508,7 @@ final class _IoDeferredSliceBlock implements Block, _IoReadable {
   ) {
     var normalizedSource = source;
     var normalizedOffset = sourceOffset;
+
     while (normalizedSource is _IoDeferredSliceBlock) {
       normalizedOffset += normalizedSource._sourceOffset;
       normalizedSource = normalizedSource._source;
@@ -476,7 +526,9 @@ final class _IoDeferredSliceBlock implements Block, _IoReadable {
   final int _sourceOffset;
   final int _length;
   final String _type;
+
   _IoBlock? _resolved;
+  Future<_IoBlock>? _resolving;
 
   @override
   int get size => _length;
@@ -501,46 +553,66 @@ final class _IoDeferredSliceBlock implements Block, _IoReadable {
   }
 
   @override
-  Future<Uint8List> arrayBuffer() => _resolveForRead().arrayBuffer();
-
-  @override
-  Future<String> text() => _resolveForRead().text();
-
-  @override
-  Stream<Uint8List> stream({int chunkSize = Block.defaultStreamChunkSize}) {
-    return _resolveForRead().stream(chunkSize: chunkSize);
+  Future<Uint8List> arrayBuffer() async {
+    final resolved = await _resolveForRead();
+    return resolved.arrayBuffer();
   }
 
   @override
-  Uint8List _readRangeSync(int offset, int length) {
+  Future<String> text() async {
+    final resolved = await _resolveForRead();
+    return resolved.text();
+  }
+
+  @override
+  Stream<Uint8List> stream({
+    int chunkSize = Block.defaultStreamChunkSize,
+  }) async* {
+    final resolved = await _resolveForRead();
+    yield* resolved.stream(chunkSize: chunkSize);
+  }
+
+  @override
+  Future<Uint8List> readRange(int offset, int length) async {
     final resolved = _resolved;
     if (resolved != null) {
-      return resolved._readRangeSync(offset, length);
+      return resolved.readRange(offset, length);
     }
 
-    if (offset < 0 || length < 0 || offset + length > _length) {
-      throw RangeError.range(offset + length, 0, _length, 'offset/length');
-    }
-
-    return _source._readRangeSync(_sourceOffset + offset, length);
+    _validateRange(_length, offset, length);
+    return _source.readRange(_sourceOffset + offset, length);
   }
 
-  _IoBlock _resolveForRead() {
+  @override
+  Future<_IoBlock> ensureMaterialized() => _resolveForRead();
+
+  Future<_IoBlock> _resolveForRead() {
     final existing = _resolved;
     if (existing != null) {
-      return existing;
+      return Future<_IoBlock>.value(existing);
     }
 
-    if (_length <= _sliceCopyThreshold) {
-      final copied = _source._readRangeSync(_sourceOffset, _length);
-      final backing = _IoBacking.fromBytes(copied);
-      final resolved = _IoBlock._(backing, 0, _length, _type);
-      _resolved = resolved;
-      return resolved;
+    final inFlight = _resolving;
+    if (inFlight != null) {
+      return inFlight;
     }
 
-    final sourceBlock = _materializeSourceBlock(_source);
-    if (sourceBlock != null) {
+    final future = _resolveInternal();
+    _resolving = future;
+    return future;
+  }
+
+  Future<_IoBlock> _resolveInternal() async {
+    try {
+      if (_length <= _sliceCopyThreshold) {
+        final copied = await _source.readRange(_sourceOffset, _length);
+        final backing = await _IoBacking.fromBytes(copied);
+        final resolved = _IoBlock._(backing, 0, _length, _type);
+        _resolved = resolved;
+        return resolved;
+      }
+
+      final sourceBlock = await _source.ensureMaterialized();
       final resolved = _IoBlock._(
         sourceBlock._backing,
         sourceBlock._offset + _sourceOffset,
@@ -549,25 +621,37 @@ final class _IoDeferredSliceBlock implements Block, _IoReadable {
       );
       _resolved = resolved;
       return resolved;
+    } finally {
+      _resolving = null;
     }
-
-    final copied = _source._readRangeSync(_sourceOffset, _length);
-    final backing = _IoBacking.fromBytes(copied);
-    final resolved = _IoBlock._(backing, 0, _length, _type);
-    _resolved = resolved;
-    return resolved;
   }
+}
 
-  static _IoBlock? _materializeSourceBlock(_IoReadable source) {
-    if (source is _IoBlock) {
-      return source;
-    }
-    if (source is _IoComposedBlock) {
-      return source._ensureMaterializedSync();
-    }
-    if (source is _IoDeferredSliceBlock) {
-      return source._resolveForRead();
-    }
-    return null;
+Stream<Uint8List> _streamReadableRange(
+  _IoReadable source,
+  int sourceOffset,
+  int length,
+) async* {
+  var readOffset = 0;
+  while (readOffset < length) {
+    final toRead = min(Block.defaultStreamChunkSize, length - readOffset);
+    yield await source.readRange(sourceOffset + readOffset, toRead);
+    readOffset += toRead;
+  }
+}
+
+Uint8List _utf8Bytes(String value) {
+  return utf8.encode(value);
+}
+
+void _validateChunkSize(int chunkSize) {
+  if (chunkSize <= 0) {
+    throw ArgumentError.value(chunkSize, 'chunkSize', 'must be greater than 0');
+  }
+}
+
+void _validateRange(int totalSize, int offset, int length) {
+  if (offset < 0 || length < 0 || offset + length > totalSize) {
+    throw RangeError.range(offset + length, 0, totalSize, 'offset/length');
   }
 }
