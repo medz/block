@@ -1,3 +1,25 @@
+## 1.0.0
+
+_Released: 2026-02-06_
+
+### BREAKING CHANGES
+
+- Reset the package to a minimal Blob-compatible API:
+  - `Block(List<Object> parts, {String type = ''})`
+  - `size`, `type`, `slice()`, `arrayBuffer()`, `text()`, `stream()`
+- Removed legacy memory/cache/dedup/public management APIs.
+- Removed legacy helper exports (`MemoryManager`, `DataStore`, `DisposableBlock`, `ByteDataView`, etc.).
+
+### Added
+
+- Platform-specialized implementations under one package via conditional imports.
+- `web` implementation that wraps native `Blob` (`package:web`).
+- `io` implementation using temp files + finalizer cleanup.
+- `io` slice strategy:
+  - copy for `<= 64KB`
+  - shared backing for `> 64KB`
+- New VM/web contract tests and Flutter integration test coverage.
+
 ## 0.0.4
 
 _Unreleased_
@@ -35,37 +57,3 @@ Improve code comments
 _Released: 2025-03-02_
 
 Initial stable release of the Block package.
-
-### Features
-
-- Core `Block` interface with efficient binary data handling
-- Multiple construction methods:
-  - `Block()` - Create from builder function
-  - `Block.empty()` - Create an empty block
-  - `Block.fromString()` - Create from strings with encoding support
-  - `Block.fromBytes()` - Create from existing Uint8List instances
-  - `Block.fromStream()` - Create from byte streams
-- Data access methods:
-  - `size` - Get block size in bytes
-  - `stream()` - Access as a Stream<Uint8List>
-  - `bytes()` - Get all data as a single Uint8List
-  - `text()` - Get data as UTF-8 decoded string
-- Slicing API with support for:
-  - Positive and negative indices
-  - Start and end positions
-  - Efficient sub-range access without copying
-- Performance optimizations:
-  - Lazy initialization
-  - Result caching
-  - Special handling for large blocks
-  - Memory-efficient implementation
-- Comprehensive error handling and validation
-
-### Implementation Details
-
-- Memory-efficient processing of binary data
-- Automatic caching of results for improved performance
-- UTF-8 decoding with fallback for malformed sequences
-- Proper resource management for stream-based blocks
-
-This is the first stable release, providing a solid foundation for efficient binary data handling in Dart applications.
