@@ -63,7 +63,7 @@ final class _IoBacking {
     _ioFinalizer.attach(this, _IoCleanupToken(file.path, handle), detach: this);
   }
 
-  static final Random _random = Random();
+  static int _counter = 0;
 
   final File file;
   final RandomAccessFile handle;
@@ -72,14 +72,17 @@ final class _IoBacking {
   static _IoBacking fromBytes(Uint8List bytes) {
     final path = _buildTempPath();
     final file = File(path);
-    file.writeAsBytesSync(bytes, flush: true);
-    final handle = file.openSync(mode: FileMode.read);
+    final handle = file.openSync(mode: FileMode.write);
+    if (bytes.isNotEmpty) {
+      handle.writeFromSync(bytes);
+    }
+    handle.setPositionSync(0);
     return _IoBacking._(file, handle, bytes.length);
   }
 
   static String _buildTempPath() {
     final now = DateTime.now().microsecondsSinceEpoch;
-    final nonce = _random.nextInt(1 << 32).toRadixString(16);
+    final nonce = (_counter++).toRadixString(16);
     final separator = Platform.pathSeparator;
     return '${Directory.systemTemp.path}$separator$ioTempFilePrefix${now}_$nonce.tmp';
   }
@@ -101,7 +104,7 @@ final class _IoBacking {
       );
     }
 
-    return Uint8List.fromList(bytes);
+    return bytes;
   }
 }
 
