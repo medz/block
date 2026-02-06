@@ -36,10 +36,13 @@ jobs:
         run: dart test
 
       - name: Run Web tests (Chrome)
-        env:
-          CHROME_EXECUTABLE: ${{ steps.setup-chrome.outputs.chrome-path }}
-          CHROME_NO_SANDBOX: 'true'
-        run: dart test -p chrome test/web_block_test.dart
+        run: |
+          cat > "$RUNNER_TEMP/chrome-no-sandbox" <<'EOF'
+          #!/usr/bin/env bash
+          exec "${{ steps.setup-chrome.outputs.chrome-path }}" --no-sandbox "$@"
+          EOF
+          chmod +x "$RUNNER_TEMP/chrome-no-sandbox"
+          CHROME_EXECUTABLE="$RUNNER_TEMP/chrome-no-sandbox" dart test -p chrome test/web_block_test.dart
 
   flutter_integration:
     name: Flutter Integration Tests
