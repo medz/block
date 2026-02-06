@@ -1,14 +1,37 @@
 # Block Benchmarks
 
-Run all benchmarks:
+Benchmarks run in-console only (no artifact files).
+
+The runner uses [`package:coal`](https://pub.dev/packages/coal) for argument parsing and terminal styling.
+
+Run full benchmark suite:
 
 ```bash
 dart benchmark/run_all.dart
 ```
 
-Current benchmark suite covers:
+Run without ANSI colors:
 
-- Block creation (single part and multipart)
-- Slice behavior (copy path and shared path)
-- `arrayBuffer()`, `text()`, and `stream()` throughput
-- Composition from nested `Block` parts
+```bash
+dart benchmark/run_all.dart --no-color
+```
+
+Coverage:
+
+- Creation (`create/single_part_4kb`, `create/single_part_1mb`)
+- Concatenation (`concat/bytes_4x256kb`, `concat/blocks_4x256kb`)
+- Slice threshold paths (`slice/copy_64kb`, `slice/share_256kb`)
+- Read APIs (`read/array_buffer_8mb`, `read/text_decode_1mb`)
+- Stream APIs (`stream/read_8mb_chunk64kb`, `stream/nested_read_4mb_chunk128kb`)
+- Composition (`compose/from_nested_blocks_4mb`)
+
+Implementation note:
+
+- High temp-file scenarios are automatically chunked into worker subprocesses to avoid `Too many open files` on environments with low `ulimit -n`.
+
+Metrics printed in console:
+
+- `avg(us)`, `p95(us)`, `p99(us)`
+- `throughput(MB/s)` for byte-based scenarios
+- `temp/iter` based on `block_io_` temp-file delta
+- `rss_peak(MB)` as process RSS peak approximation

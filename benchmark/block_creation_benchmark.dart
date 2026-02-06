@@ -2,57 +2,69 @@ import 'package:block/block.dart';
 
 import 'framework.dart';
 
-Future<List<BenchmarkResult>> runCreationBenchmarks() async {
+List<BenchmarkScenario> buildCreationScenarios() {
   final small = makeSequentialBytes(4 * 1024);
-  final medium = makeSequentialBytes(1 * 1024 * 1024);
-  final large = makeSequentialBytes(8 * 1024 * 1024);
+  final medium = makeSequentialBytes(1024 * 1024);
+  final quarter = makeSequentialBytes(256 * 1024);
+  final nestedPart = Block(<Object>[quarter]);
 
-  final results = <BenchmarkResult>[
-    measureSync(
-      'create 4KB block',
-      () {
+  return <BenchmarkScenario>[
+    BenchmarkScenario.sync(
+      name: 'create/single_part_4kb',
+      category: 'Creation',
+      iterations: 500,
+      bytesPerIteration: small.length,
+      maxIterationsPerProcess: 96,
+      action: () {
         final block = Block(<Object>[small]);
         if (block.size != small.length) {
           throw StateError('size mismatch');
         }
       },
-      iterations: 500,
-      bytesPerIteration: small.length,
     ),
-    measureSync(
-      'create 1MB block',
-      () {
+    BenchmarkScenario.sync(
+      name: 'create/single_part_1mb',
+      category: 'Creation',
+      iterations: 80,
+      bytesPerIteration: medium.length,
+      maxIterationsPerProcess: 48,
+      action: () {
         final block = Block(<Object>[medium]);
         if (block.size != medium.length) {
           throw StateError('size mismatch');
         }
       },
-      iterations: 80,
-      bytesPerIteration: medium.length,
     ),
-    measureSync(
-      'create 8MB block',
-      () {
-        final block = Block(<Object>[large]);
-        if (block.size != large.length) {
+    BenchmarkScenario.sync(
+      name: 'concat/bytes_4x256kb',
+      category: 'Concatenation',
+      iterations: 120,
+      bytesPerIteration: 1024 * 1024,
+      maxIterationsPerProcess: 64,
+      action: () {
+        final block = Block(<Object>[quarter, quarter, quarter, quarter]);
+        if (block.size != 1024 * 1024) {
           throw StateError('size mismatch');
         }
       },
-      iterations: 15,
-      bytesPerIteration: large.length,
     ),
-    measureSync(
-      'create multipart block (4x1MB)',
-      () {
-        final block = Block(<Object>[medium, medium, medium, medium]);
-        if (block.size != medium.length * 4) {
+    BenchmarkScenario.sync(
+      name: 'concat/blocks_4x256kb',
+      category: 'Concatenation',
+      iterations: 120,
+      bytesPerIteration: 1024 * 1024,
+      maxIterationsPerProcess: 64,
+      action: () {
+        final block = Block(<Object>[
+          nestedPart,
+          nestedPart,
+          nestedPart,
+          nestedPart,
+        ]);
+        if (block.size != 1024 * 1024) {
           throw StateError('size mismatch');
         }
       },
-      iterations: 40,
-      bytesPerIteration: medium.length * 4,
     ),
   ];
-
-  return results;
 }
