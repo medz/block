@@ -1,6 +1,9 @@
 import 'dart:typed_data';
 
-import 'platform/block_factory.dart' as platform;
+import 'block_stub.dart'
+    if (dart.library.io) 'block_file.dart'
+    if (dart.library.js_interop) 'block_web.dart'
+    as platform;
 
 /// An immutable, Blob-like binary data container.
 abstract interface class Block {
