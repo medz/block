@@ -1,17 +1,8 @@
 ## 1.1.0
 
-_Unreleased_
+_Released: 2026-02-24_
 
-### Added
-
-- Added a small-block in-memory fast path on `io` for byte-only parts up to `64KB`.
-- Added shared internal helpers (`BlockBase`, `MemoryBlock`, and shared utilities) to reduce duplicated backend logic.
-
-### Changed
-
-- `io` now avoids temp file materialization for small byte-only blocks.
-- `io` keeps lazy temp-file materialization for larger/composed blocks.
-- Updated VM/integration tests and docs for the small-block in-memory behavior.
+- [#8](https://github.com/medz/block/pull/8) Refactor internals to a flattened `lib/src` layout with thinner io/web lazy backends, reduced copy overhead, and improved benchmark performance.
 
 ## 1.0.0
 
