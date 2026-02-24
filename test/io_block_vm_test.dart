@@ -11,21 +11,35 @@ import 'support/foreign_block.dart';
 
 void main() {
   group('IO implementation', () {
-    test('materializes temporary file on first read', () async {
-      await _withIsolatedSystemTemp((tempDir) async {
-        expect(_countBlockTempFiles(tempDir), equals(0));
+    test(
+      'keeps small blocks in memory and materializes large blocks lazily',
+      () async {
+        await _withIsolatedSystemTemp((tempDir) async {
+          expect(_countBlockTempFiles(tempDir), equals(0));
 
-        final block = Block(<Object>[
-          Uint8List.fromList(const [1, 2, 3]),
-        ]);
+          final small = Block(<Object>[
+            Uint8List.fromList(const [1, 2, 3]),
+          ]);
 
-        expect(_countBlockTempFiles(tempDir), equals(0));
+          expect(_countBlockTempFiles(tempDir), equals(0));
 
-        final bytes = await block.arrayBuffer();
-        expect(bytes, equals(Uint8List.fromList(const [1, 2, 3])));
-        expect(_countBlockTempFiles(tempDir), equals(1));
-      });
-    });
+          final smallBytes = await small.arrayBuffer();
+          expect(smallBytes, equals(Uint8List.fromList(const [1, 2, 3])));
+          expect(_countBlockTempFiles(tempDir), equals(0));
+
+          final largeBytes = Uint8List.fromList(
+            List<int>.generate(128 * 1024, (i) => i % 256),
+          );
+          final large = Block(<Object>[largeBytes]);
+
+          expect(_countBlockTempFiles(tempDir), equals(0));
+
+          final readBack = await large.arrayBuffer();
+          expect(readBack, equals(largeBytes));
+          expect(_countBlockTempFiles(tempDir), equals(1));
+        });
+      },
+    );
 
     test('supports foreign Block parts lazily', () async {
       await _withIsolatedSystemTemp((tempDir) async {
@@ -46,29 +60,31 @@ void main() {
       });
     });
 
-    test('stream on composed block does not materialize temp files', () async {
-      await _withIsolatedSystemTemp((tempDir) async {
-        final child = Block(<Object>['child']);
-        final parent = Block(<Object>['[', child, ']']);
+    test(
+      'stream on large composed block does not materialize temp files',
+      () async {
+        await _withIsolatedSystemTemp((tempDir) async {
+          final source = Uint8List.fromList(
+            List<int>.generate(128 * 1024, (i) => i % 256),
+          );
+          final block = Block(<Object>[source]);
 
-        expect(_countBlockTempFiles(tempDir), equals(0));
+          expect(_countBlockTempFiles(tempDir), equals(0));
 
-        final streamed = <int>[];
-        await for (final chunk in parent.stream(chunkSize: 2)) {
-          expect(chunk.length, lessThanOrEqualTo(2));
-          streamed.addAll(chunk);
-        }
+          final streamed = <int>[];
+          await for (final chunk in block.stream(chunkSize: 2 * 1024)) {
+            expect(chunk.length, lessThanOrEqualTo(2 * 1024));
+            streamed.addAll(chunk);
+          }
 
-        expect(streamed, equals(Uint8List.fromList('[child]'.codeUnits)));
-        expect(_countBlockTempFiles(tempDir), equals(0));
+          expect(streamed, equals(source));
+          expect(_countBlockTempFiles(tempDir), equals(0));
 
-        expect(
-          await parent.arrayBuffer(),
-          equals(Uint8List.fromList('[child]'.codeUnits)),
-        );
-        expect(_countBlockTempFiles(tempDir), equals(1));
-      });
-    });
+          expect(await block.arrayBuffer(), equals(source));
+          expect(_countBlockTempFiles(tempDir), equals(1));
+        });
+      },
+    );
 
     test('slice <= 64KB copies into a new temp file', () async {
       await _withIsolatedSystemTemp((tempDir) async {

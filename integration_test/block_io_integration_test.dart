@@ -46,7 +46,7 @@ void main() {
       final textBlock = Block(<Object>['abc']);
       expect(_countBlockTempFiles(tempDir), equals(2));
       expect(await textBlock.text(), equals('abc'));
-      expect(_countBlockTempFiles(tempDir), equals(3));
+      expect(_countBlockTempFiles(tempDir), equals(2));
     });
   });
 }

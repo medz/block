@@ -1,4 +1,4 @@
-import '../block.dart';
+import 'block.dart';
 
 Block createBlock(List<Object> parts, {String type = ''}) {
   throw UnsupportedError(

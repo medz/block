@@ -9,8 +9,8 @@
 
 - One minimal, Blob-compatible API surface.
 - `web`: wraps native browser `Blob` via [`package:web`](https://pub.dev/packages/web).
-- `io`: stores block data in temp files and uses finalizers for cleanup.
-- `Block` parts are resolved lazily: bytes are fetched/materialized on first read (`arrayBuffer`/`text`/`stream`).
+- `io`: keeps small byte-only blocks in memory and lazily materializes larger/composed blocks to temp files (finalizer cleanup).
+- `Block` parts are resolved lazily for `io` composed blocks: bytes are fetched/materialized on first read (`arrayBuffer`/`text`).
 - `slice()` strategy on `io`:
   - `<= 64KB`: copy to a new temp file
   - `> 64KB`: share backing file with offset/length view

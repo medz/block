@@ -1,6 +1,6 @@
 name: block
 description: Blob-compatible binary data blocks with platform-optimized implementations for web and io.
-version: 1.0.0
+version: 1.1.0
 repository: https://github.com/medz/block
 
 topics:
