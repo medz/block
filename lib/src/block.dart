@@ -17,6 +17,7 @@ abstract interface class Block {
   /// - [Uint8List]
   /// - [ByteData]
   /// - [Block]
+  /// - `dart:io File` on IO platforms
   factory Block(List<Object> parts, {String type = ''}) =>
       platform.createBlock(parts, type: type);
 

@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:block/block.dart';
+import 'package:block/io.dart';
 import 'package:test/test.dart';
 
 import 'support/foreign_block.dart';
@@ -123,6 +124,176 @@ void main() {
         expect(_countBlockTempFiles(tempDir), equals(1));
       });
     });
+
+    test(
+      'FileBlock.open reads source files without temp materialization',
+      () async {
+        await _withIsolatedSystemTemp((tempDir) async {
+          final data = Uint8List.fromList(
+            List<int>.generate(128 * 1024, (i) => i % 256),
+          );
+          final file = File(
+            '${tempDir.path}${Platform.pathSeparator}source_open.bin',
+          );
+          await file.writeAsBytes(data);
+
+          final block = await FileBlock.open(
+            file,
+            type: 'application/octet-stream',
+          );
+
+          expect(block.size, equals(data.length));
+          expect(block.type, equals('application/octet-stream'));
+          expect(_countBlockTempFiles(tempDir), equals(0));
+
+          final readBack = await block.arrayBuffer();
+          expect(readBack, equals(data));
+          expect(_countBlockTempFiles(tempDir), equals(0));
+          expect(await file.exists(), isTrue);
+        });
+      },
+    );
+
+    test('FileBlock range and slice stay on the source file', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        final data = Uint8List.fromList(
+          List<int>.generate(128 * 1024, (i) => i % 256),
+        );
+        final file = File(
+          '${tempDir.path}${Platform.pathSeparator}source_range.bin',
+        );
+        await file.writeAsBytes(data);
+
+        final block = await FileBlock.openRange(
+          file,
+          offset: 1024,
+          length: 4096,
+          type: 'application/octet-stream',
+        );
+        final slice = block.slice(256, 1280);
+
+        expect(slice, isA<FileBlock>());
+        expect(await slice.arrayBuffer(), equals(data.sublist(1280, 2304)));
+        expect(_countBlockTempFiles(tempDir), equals(0));
+        expect(await file.exists(), isTrue);
+      });
+    });
+
+    test('FileBlock.openRange rejects invalid ranges', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        final data = Uint8List.fromList(
+          List<int>.generate(1024, (i) => i % 256),
+        );
+        final file = File(
+          '${tempDir.path}${Platform.pathSeparator}source_invalid_range.bin',
+        );
+        await file.writeAsBytes(data);
+
+        await expectLater(
+          () => FileBlock.openRange(file, offset: -1, length: 1),
+          throwsA(isA<RangeError>()),
+        );
+        await expectLater(
+          () => FileBlock.openRange(file, offset: data.length + 1, length: 1),
+          throwsA(isA<RangeError>()),
+        );
+        await expectLater(
+          () => FileBlock.openRange(file, offset: data.length - 1, length: 2),
+          throwsA(isA<RangeError>()),
+        );
+
+        expect(_countBlockTempFiles(tempDir), equals(0));
+        expect(await file.exists(), isTrue);
+      });
+    });
+
+    test('FileBlock composes lazily with Block parts', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        final data = Uint8List.fromList(
+          List<int>.generate(96 * 1024, (i) => i % 256),
+        );
+        final file = File(
+          '${tempDir.path}${Platform.pathSeparator}source_composed.bin',
+        );
+        await file.writeAsBytes(data);
+
+        final fileBlock = await FileBlock.open(file);
+        final block = Block(<Object>[fileBlock, '!']);
+
+        expect(_countBlockTempFiles(tempDir), equals(0));
+
+        final streamed = <int>[];
+        await for (final chunk in block.stream(chunkSize: 8 * 1024)) {
+          streamed.addAll(chunk);
+        }
+
+        expect(streamed, equals(<int>[...data, '!'.codeUnitAt(0)]));
+        expect(_countBlockTempFiles(tempDir), equals(0));
+        expect(await file.exists(), isTrue);
+      });
+    });
+
+    test('Block constructor accepts File parts lazily on IO', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        final data = Uint8List.fromList(
+          List<int>.generate(96 * 1024, (i) => i % 256),
+        );
+        final file = File(
+          '${tempDir.path}${Platform.pathSeparator}source_direct_file.bin',
+        );
+        await file.writeAsBytes(data);
+
+        final block = Block(<Object>['[', file, ']']);
+
+        expect(block.size, equals(data.length + 2));
+        expect(_countBlockTempFiles(tempDir), equals(0));
+
+        final streamed = <int>[];
+        await for (final chunk in block.stream(chunkSize: 8 * 1024)) {
+          streamed.addAll(chunk);
+        }
+
+        expect(
+          streamed,
+          equals(<int>['['.codeUnitAt(0), ...data, ']'.codeUnitAt(0)]),
+        );
+        expect(_countBlockTempFiles(tempDir), equals(0));
+        expect(await file.exists(), isTrue);
+      });
+    });
+
+    test(
+      'Block constructor does not open File parts until first read',
+      () async {
+        if (!_canInspectOpenFiles()) {
+          return;
+        }
+
+        await _withIsolatedSystemTemp((tempDir) async {
+          final data = Uint8List.fromList(
+            List<int>.generate(4 * 1024, (i) => i % 256),
+          );
+          final file = File(
+            '${tempDir.path}${Platform.pathSeparator}source_lazy_fd.bin',
+          );
+          await file.writeAsBytes(data);
+
+          final baseline = await _countOpenDescriptorsFor(file);
+          final block = Block(<Object>[file]);
+
+          expect(block.size, equals(data.length));
+          expect(await _countOpenDescriptorsFor(file), equals(baseline));
+
+          expect(await block.arrayBuffer(), equals(data));
+
+          final streamed = <int>[];
+          await for (final chunk in block.stream(chunkSize: 1024)) {
+            streamed.addAll(chunk);
+          }
+          expect(streamed, equals(data));
+        });
+      },
+    );
   });
 }
 
@@ -167,4 +338,24 @@ String _basename(String path) {
     return path;
   }
   return path.substring(separatorIndex + 1);
+}
+
+bool _canInspectOpenFiles() {
+  try {
+    final result = Process.runSync('which', const ['lsof']);
+    return result.exitCode == 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+Future<int> _countOpenDescriptorsFor(File file) async {
+  final resolvedPath = await file.resolveSymbolicLinks();
+  final result = await Process.run('lsof', ['-p', '$pid']);
+  if (result.exitCode != 0) {
+    throw StateError('Failed to inspect open files: ${result.stderr}');
+  }
+
+  final output = '${result.stdout}';
+  return output.split('\n').where((line) => line.contains(resolvedPath)).length;
 }
