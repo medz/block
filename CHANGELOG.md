@@ -4,14 +4,24 @@
 
 _Released: 2026-03-13_
 
-- Expose `FileBlock` as a public VM API via `package:block/io.dart`, with
-  `open()` and `openRange()` for lazy file-backed blocks.
+### Features
+
+- Expose `FileBlock` as a public VM API via `package:block/io.dart`.
+- Add `FileBlock.open()` and `FileBlock.openRange()` for lazy file-backed block
+  views.
 - Accept `dart:io File` directly in `Block(List<Object> parts, ...)` on IO
   platforms.
-- Keep file-backed parts lazy to open and reuse opened backings via weak
-  references.
-- Make the internal `BlockBase` default read path stream-first so fallback
-  `arrayBuffer()` materializes from `stream()` instead of the reverse.
+
+### Behavior
+
+- Make file-backed IO parts lazy to open while preserving reusable file-backed
+  views.
+- Make the default `BlockBase.arrayBuffer()` fallback materialize from
+  `stream()` instead of requiring the reverse direction.
+
+### Documentation
+
+- Add VM file-backed usage examples to the README.
 - Document `stream()` as the preferred lazy integration path for downstream
   runtimes.
 
