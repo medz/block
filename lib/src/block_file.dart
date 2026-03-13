@@ -345,7 +345,8 @@ final class _IoFileRefBlock extends BlockBase implements _IoReadable {
   final int _length;
   final String _type;
 
-  Future<FileBlock>? _opened;
+  WeakReference<FileBlock>? _opened;
+  Future<FileBlock>? _opening;
 
   @override
   int get size => _length;
@@ -367,98 +368,53 @@ final class _IoFileRefBlock extends BlockBase implements _IoReadable {
 
   @override
   Future<Uint8List> arrayBuffer() async {
-    final opened = _opened;
-    if (opened != null) {
-      return (await opened).arrayBuffer();
-    }
-
-    return _readDirect(_offset, _length);
+    final opened = await ensureMaterialized();
+    return opened.arrayBuffer();
   }
 
   @override
   Stream<Uint8List> stream({
     int chunkSize = Block.defaultStreamChunkSize,
   }) async* {
-    final opened = _opened;
-    if (opened != null) {
-      yield* (await opened).stream(chunkSize: chunkSize);
-      return;
-    }
-
-    validateChunkSize(chunkSize);
-    if (_length == 0) {
-      return;
-    }
-
-    final raf = await _file.open(mode: FileMode.read);
-    try {
-      await raf.setPosition(_offset);
-      var remaining = _length;
-      while (remaining > 0) {
-        final toRead = min(chunkSize, remaining);
-        final chunk = await raf.read(toRead);
-        if (chunk.isEmpty) {
-          throw StateError(
-            'Unexpected end of file while streaming ${_file.path}.',
-          );
-        }
-        yield chunk;
-        remaining -= chunk.length;
-      }
-    } finally {
-      try {
-        await raf.close();
-      } catch (_) {
-        // Best-effort cleanup.
-      }
-    }
+    final opened = await ensureMaterialized();
+    yield* opened.stream(chunkSize: chunkSize);
   }
 
   @override
   Future<Uint8List> readRange(int offset, int length) async {
-    final opened = _opened;
-    if (opened != null) {
-      return (await opened).readRange(offset, length);
-    }
-
-    _validateRange(_length, offset, length);
-    return _readDirect(_offset + offset, length);
+    final opened = await ensureMaterialized();
+    return opened.readRange(offset, length);
   }
 
   @override
   Future<FileBlock> ensureMaterialized() {
-    return _opened ??= FileBlock._openWithKnownSize(
+    final cached = _opened?.target;
+    if (cached != null) {
+      return Future<FileBlock>.value(cached);
+    }
+
+    final inFlight = _opening;
+    if (inFlight != null) {
+      return inFlight;
+    }
+
+    final future = FileBlock._openWithKnownSize(
       _file,
       totalSize: _fileSize,
       offset: _offset,
       length: _length,
       type: _type,
     );
-  }
 
-  Future<Uint8List> _readDirect(int offset, int length) async {
-    if (length == 0) {
-      return Uint8List(0);
-    }
-
-    final raf = await _file.open(mode: FileMode.read);
-    try {
-      await raf.setPosition(offset);
-      final bytes = await raf.read(length);
-      if (bytes.length != length) {
-        throw StateError(
-          'Unexpected end of file while reading $length bytes from '
-          '${_file.path}.',
-        );
-      }
-      return bytes;
-    } finally {
-      try {
-        await raf.close();
-      } catch (_) {
-        // Best-effort cleanup.
-      }
-    }
+    _opening = future;
+    return future
+        .then((block) {
+          _opened = WeakReference<FileBlock>(block);
+          return block;
+        })
+        .whenComplete(() {
+          _opening = null;
+        });
   }
 }
 
