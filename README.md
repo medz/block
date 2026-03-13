@@ -56,6 +56,7 @@ materializes the entire block in memory.
 On `dart:io`, you can open a file directly as a lazy `Block`:
 
 ```dart
+import 'dart:math' as math;
 import 'dart:io';
 import 'package:block/io.dart';
 
@@ -66,10 +67,11 @@ Future<void> main() async {
   );
 
   final header = block.slice(0, 4096);
+  final tailLength = math.min(4096, block.size);
   final footer = await FileBlock.openRange(
     File('payload.bin'),
-    offset: block.size - 4096,
-    length: 4096,
+    offset: block.size - tailLength,
+    length: tailLength,
   );
 
   await for (final chunk in header.stream()) {

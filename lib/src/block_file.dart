@@ -269,8 +269,9 @@ final class FileBlock extends BlockBase implements _IoReadable {
     required int length,
     String type = '',
   }) async {
+    final totalSize = await file.length();
+    _validateRange(totalSize, offset, length);
     final backing = await _IoBacking.fromFile(file);
-    _validateRange(backing.totalSize, offset, length);
     return FileBlock._(backing, offset, length, type);
   }
 

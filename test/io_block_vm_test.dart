@@ -179,6 +179,34 @@ void main() {
       });
     });
 
+    test('FileBlock.openRange rejects invalid ranges', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        final data = Uint8List.fromList(
+          List<int>.generate(1024, (i) => i % 256),
+        );
+        final file = File(
+          '${tempDir.path}${Platform.pathSeparator}source_invalid_range.bin',
+        );
+        await file.writeAsBytes(data);
+
+        await expectLater(
+          () => FileBlock.openRange(file, offset: -1, length: 1),
+          throwsA(isA<RangeError>()),
+        );
+        await expectLater(
+          () => FileBlock.openRange(file, offset: data.length + 1, length: 1),
+          throwsA(isA<RangeError>()),
+        );
+        await expectLater(
+          () => FileBlock.openRange(file, offset: data.length - 1, length: 2),
+          throwsA(isA<RangeError>()),
+        );
+
+        expect(_countBlockTempFiles(tempDir), equals(0));
+        expect(await file.exists(), isTrue);
+      });
+    });
+
     test('FileBlock composes lazily with Block parts', () async {
       await _withIsolatedSystemTemp((tempDir) async {
         final data = Uint8List.fromList(
