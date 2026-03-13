@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:block/block.dart';
+import 'package:block/io.dart';
 import 'package:test/test.dart';
 
 import 'support/foreign_block.dart';
@@ -121,6 +122,115 @@ void main() {
 
         await parent.arrayBuffer();
         expect(_countBlockTempFiles(tempDir), equals(1));
+      });
+    });
+
+    test(
+      'FileBlock.open reads source files without temp materialization',
+      () async {
+        await _withIsolatedSystemTemp((tempDir) async {
+          final data = Uint8List.fromList(
+            List<int>.generate(128 * 1024, (i) => i % 256),
+          );
+          final file = File(
+            '${tempDir.path}${Platform.pathSeparator}source_open.bin',
+          );
+          await file.writeAsBytes(data);
+
+          final block = await FileBlock.open(
+            file,
+            type: 'application/octet-stream',
+          );
+
+          expect(block.size, equals(data.length));
+          expect(block.type, equals('application/octet-stream'));
+          expect(_countBlockTempFiles(tempDir), equals(0));
+
+          final readBack = await block.arrayBuffer();
+          expect(readBack, equals(data));
+          expect(_countBlockTempFiles(tempDir), equals(0));
+          expect(await file.exists(), isTrue);
+        });
+      },
+    );
+
+    test('FileBlock range and slice stay on the source file', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        final data = Uint8List.fromList(
+          List<int>.generate(128 * 1024, (i) => i % 256),
+        );
+        final file = File(
+          '${tempDir.path}${Platform.pathSeparator}source_range.bin',
+        );
+        await file.writeAsBytes(data);
+
+        final block = await FileBlock.openRange(
+          file,
+          offset: 1024,
+          length: 4096,
+          type: 'application/octet-stream',
+        );
+        final slice = block.slice(256, 1280);
+
+        expect(slice, isA<FileBlock>());
+        expect(await slice.arrayBuffer(), equals(data.sublist(1280, 2304)));
+        expect(_countBlockTempFiles(tempDir), equals(0));
+        expect(await file.exists(), isTrue);
+      });
+    });
+
+    test('FileBlock composes lazily with Block parts', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        final data = Uint8List.fromList(
+          List<int>.generate(96 * 1024, (i) => i % 256),
+        );
+        final file = File(
+          '${tempDir.path}${Platform.pathSeparator}source_composed.bin',
+        );
+        await file.writeAsBytes(data);
+
+        final fileBlock = await FileBlock.open(file);
+        final block = Block(<Object>[fileBlock, '!']);
+
+        expect(_countBlockTempFiles(tempDir), equals(0));
+
+        final streamed = <int>[];
+        await for (final chunk in block.stream(chunkSize: 8 * 1024)) {
+          streamed.addAll(chunk);
+        }
+
+        expect(streamed, equals(<int>[...data, '!'.codeUnitAt(0)]));
+        expect(_countBlockTempFiles(tempDir), equals(0));
+        expect(await file.exists(), isTrue);
+      });
+    });
+
+    test('Block constructor accepts File parts lazily on IO', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        final data = Uint8List.fromList(
+          List<int>.generate(96 * 1024, (i) => i % 256),
+        );
+        final file = File(
+          '${tempDir.path}${Platform.pathSeparator}source_direct_file.bin',
+        );
+        await file.writeAsBytes(data);
+
+        final block = Block(<Object>['[', file, ']']);
+
+        expect(block.size, equals(data.length + 2));
+        expect(_countBlockTempFiles(tempDir), equals(0));
+
+        final streamed = <int>[];
+        await for (final chunk in block.stream(chunkSize: 8 * 1024)) {
+          streamed.addAll(chunk);
+        }
+
+        expect(
+          streamed,
+          equals(<int>['['.codeUnitAt(0), ...data, ']'.codeUnitAt(0)]),
+        );
+        expect(_countBlockTempFiles(tempDir), equals(0));
+        expect(await file.exists(), isTrue);
       });
     });
   });

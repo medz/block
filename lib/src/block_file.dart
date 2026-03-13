@@ -31,10 +31,15 @@ Block createBlock(List<Object> parts, {String type = ''}) {
 }
 
 final class _IoBacking {
-  _IoBacking._(this.file, this._handle, this.totalSize) {
+  _IoBacking._(
+    this.file,
+    this._handle,
+    this.totalSize, {
+    required this.deleteOnCleanup,
+  }) {
     _ioHandleFinalizer.attach(
       this,
-      _IoCleanupToken(file.path, _handle),
+      _IoCleanupToken(file.path, _handle, deleteOnCleanup),
       detach: this,
     );
   }
@@ -44,6 +49,7 @@ final class _IoBacking {
   final File file;
   final RandomAccessFile _handle;
   final int totalSize;
+  final bool deleteOnCleanup;
   Future<void> _pending = Future<void>.value();
 
   static Future<_IoBacking> fromBytes(Uint8List bytes) {
@@ -82,7 +88,7 @@ final class _IoBacking {
       writer = null;
 
       reader = await file.open(mode: FileMode.read);
-      return _IoBacking._(file, reader, totalSize);
+      return _IoBacking._(file, reader, totalSize, deleteOnCleanup: true);
     } catch (_) {
       if (writer != null) {
         try {
@@ -110,6 +116,18 @@ final class _IoBacking {
 
       rethrow;
     }
+  }
+
+  static Future<_IoBacking> fromFile(File file) async {
+    final totalSize = await file.length();
+    final reader = await file.open(mode: FileMode.read);
+    return _IoBacking._(file, reader, totalSize, deleteOnCleanup: false);
+  }
+
+  static _IoBacking fromFileSync(File file) {
+    final totalSize = file.lengthSync();
+    final reader = file.openSync(mode: FileMode.read);
+    return _IoBacking._(file, reader, totalSize, deleteOnCleanup: false);
   }
 
   static String _buildTempPath() {
@@ -194,10 +212,11 @@ final class _IoBacking {
 }
 
 final class _IoCleanupToken {
-  _IoCleanupToken(this.path, this.handle);
+  _IoCleanupToken(this.path, this.handle, this.deleteOnCleanup);
 
   final String path;
   final RandomAccessFile handle;
+  final bool deleteOnCleanup;
 }
 
 final Finalizer<_IoCleanupToken> _ioHandleFinalizer =
@@ -206,6 +225,10 @@ final Finalizer<_IoCleanupToken> _ioHandleFinalizer =
         token.handle.closeSync();
       } catch (_) {
         // Best-effort cleanup.
+      }
+
+      if (!token.deleteOnCleanup) {
+        return;
       }
 
       try {
@@ -223,11 +246,33 @@ abstract interface class _IoReadable {
 
   Future<Uint8List> readRange(int offset, int length);
 
-  Future<_IoFileBlock> ensureMaterialized();
+  Future<FileBlock> ensureMaterialized();
 }
 
-final class _IoFileBlock extends BlockBase implements _IoReadable {
-  _IoFileBlock._(this._backing, this._offset, this._length, this._type);
+/// A [Block] view backed by a `dart:io` [File].
+///
+/// The file length is captured when the block is opened. Callers must treat the
+/// source file as immutable for the lifetime of the block.
+final class FileBlock extends BlockBase implements _IoReadable {
+  FileBlock._(this._backing, this._offset, this._length, this._type);
+
+  /// Opens an entire [file] as a lazy, file-backed [Block].
+  static Future<FileBlock> open(File file, {String type = ''}) async {
+    final backing = await _IoBacking.fromFile(file);
+    return FileBlock._(backing, 0, backing.totalSize, type);
+  }
+
+  /// Opens a byte range of [file] as a lazy, file-backed [Block].
+  static Future<FileBlock> openRange(
+    File file, {
+    required int offset,
+    required int length,
+    String type = '',
+  }) async {
+    final backing = await _IoBacking.fromFile(file);
+    _validateRange(backing.totalSize, offset, length);
+    return FileBlock._(backing, offset, length, type);
+  }
 
   final _IoBacking _backing;
   final int _offset;
@@ -243,9 +288,9 @@ final class _IoFileBlock extends BlockBase implements _IoReadable {
   @override
   Block slice(int start, [int? end, String? contentType]) {
     final bounds = normalizeSliceBounds(_length, start, end);
-    return _IoLazyBlock._fromSource(
-      this,
-      bounds.start,
+    return FileBlock._(
+      _backing,
+      _offset + bounds.start,
       bounds.length,
       contentType ?? '',
     );
@@ -266,7 +311,7 @@ final class _IoFileBlock extends BlockBase implements _IoReadable {
   }
 
   @override
-  Future<_IoFileBlock> ensureMaterialized() async => this;
+  Future<FileBlock> ensureMaterialized() async => this;
 }
 
 final class _IoLazyBlock extends BlockBase implements _IoReadable {
@@ -310,8 +355,8 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
   final int _length;
   final String _type;
 
-  _IoFileBlock? _materialized;
-  Future<_IoFileBlock>? _materializing;
+  FileBlock? _materialized;
+  Future<FileBlock>? _materializing;
 
   bool get _isComposed => _parts != null;
 
@@ -375,10 +420,10 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
   }
 
   @override
-  Future<_IoFileBlock> ensureMaterialized() {
+  Future<FileBlock> ensureMaterialized() {
     final existing = _materialized;
     if (existing != null) {
-      return Future<_IoFileBlock>.value(existing);
+      return Future<FileBlock>.value(existing);
     }
 
     final inFlight = _materializing;
@@ -391,14 +436,14 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
     return future;
   }
 
-  Future<_IoFileBlock> _materialize() async {
+  Future<FileBlock> _materialize() async {
     try {
       if (_isComposed) {
         final backing = await _IoBacking.fromChunks(
           stream(chunkSize: _materializeChunkSize),
           _length,
         );
-        final block = _IoFileBlock._(backing, 0, _length, _type);
+        final block = FileBlock._(backing, 0, _length, _type);
         _materialized = block;
         return block;
       }
@@ -406,13 +451,13 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
       if (_length <= _sliceCopyThreshold) {
         final copied = await _source!.readRange(_sourceOffset, _length);
         final backing = await _IoBacking.fromBytes(copied);
-        final block = _IoFileBlock._(backing, 0, _length, _type);
+        final block = FileBlock._(backing, 0, _length, _type);
         _materialized = block;
         return block;
       }
 
       final sourceBlock = await _source!.ensureMaterialized();
-      final block = _IoFileBlock._(
+      final block = FileBlock._(
         sourceBlock._backing,
         sourceBlock._offset + _sourceOffset,
         _length,
@@ -507,6 +552,14 @@ _BlockPart _normalizePart(Object part) {
     return (block: part, length: part.size);
   }
 
+  if (part is File) {
+    final backing = _IoBacking.fromFileSync(part);
+    return (
+      block: FileBlock._(backing, 0, backing.totalSize, ''),
+      length: backing.totalSize,
+    );
+  }
+
   if (part is _IoReadable && part is Block) {
     return (block: part as Block, length: part.size);
   }
@@ -517,7 +570,7 @@ _BlockPart _normalizePart(Object part) {
 
   throw ArgumentError(
     'Unsupported part type: ${part.runtimeType}. '
-    'Supported types are String, Uint8List, ByteData, and Block.',
+    'Supported types are String, Uint8List, ByteData, File, and Block.',
   );
 }
 

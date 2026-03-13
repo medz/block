@@ -51,11 +51,43 @@ For downstream runtimes and fetch-style abstractions, prefer `stream()` when
 you want to preserve a lazy pipeline. `arrayBuffer()` intentionally
 materializes the entire block in memory.
 
+### VM File-Backed Blocks
+
+On `dart:io`, you can open a file directly as a lazy `Block`:
+
+```dart
+import 'dart:io';
+import 'package:block/io.dart';
+
+Future<void> main() async {
+  final block = await FileBlock.open(
+    File('payload.bin'),
+    type: 'application/octet-stream',
+  );
+
+  final header = block.slice(0, 4096);
+  final footer = await FileBlock.openRange(
+    File('payload.bin'),
+    offset: block.size - 4096,
+    length: 4096,
+  );
+
+  await for (final chunk in header.stream()) {
+    // handle bytes lazily
+  }
+}
+```
+
+`FileBlock` captures the file length when opened and reads from the source file
+on demand. Callers must treat the underlying file as immutable while a block
+view is in use.
+
 Supported constructor part types:
 
 - `String`
 - `Uint8List`
 - `ByteData`
+- `File` on `dart:io`
 - `Block`
 
 Additional web-only part types:
