@@ -31,11 +31,16 @@ abstract interface class Block {
   Block slice(int start, [int? end, String? contentType]);
 
   /// Returns all bytes.
+  ///
+  /// This materializes the full block in memory.
   Future<Uint8List> arrayBuffer();
 
   /// Returns UTF-8 decoded text.
   Future<String> text();
 
   /// Streams bytes in chunks.
+  ///
+  /// This is the primary lazy read path for downstream integrators that want
+  /// to preserve streaming behavior.
   Stream<Uint8List> stream({int chunkSize = defaultStreamChunkSize});
 }

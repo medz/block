@@ -97,4 +97,9 @@ final class MemoryBlock extends BlockBase {
 
   @override
   Future<Uint8List> arrayBuffer() async => _bytes;
+
+  @override
+  Stream<Uint8List> stream({int chunkSize = Block.defaultStreamChunkSize}) {
+    return chunkedBytes(_bytes, chunkSize: chunkSize);
+  }
 }

@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:block/block.dart';
+import 'package:block/src/block_base.dart';
 import 'package:test/test.dart';
 
 import 'support/foreign_block.dart';
@@ -81,6 +82,26 @@ void main() {
       expect(streamed, equals(bytes));
     });
 
+    test(
+      'BlockBase fallback materializes from stream without eager reads',
+      () async {
+        final block = _StreamingOnlyBlock(<Uint8List>[
+          Uint8List.fromList(const [104, 101, 108]),
+          Uint8List.fromList(const [108, 111]),
+        ]);
+
+        expect(await block.text(), equals('hello'));
+        expect(block.streamCalls, equals(1));
+
+        final bytes = await block.arrayBuffer();
+        expect(
+          bytes,
+          equals(Uint8List.fromList(const [104, 101, 108, 108, 111])),
+        );
+        expect(block.streamCalls, equals(2));
+      },
+    );
+
     test('supports nesting with Block parts', () async {
       final child = Block(<Object>['child']);
       final parent = Block(<Object>['[', child, ']']);
@@ -112,4 +133,40 @@ void main() {
       );
     });
   });
+}
+
+final class _StreamingOnlyBlock extends BlockBase {
+  _StreamingOnlyBlock(this._chunks);
+
+  final List<Uint8List> _chunks;
+  int streamCalls = 0;
+
+  @override
+  String get type => '';
+
+  @override
+  int get size => _chunks.fold(0, (total, chunk) => total + chunk.length);
+
+  @override
+  Block slice(int start, [int? end, String? contentType]) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Stream<Uint8List> stream({
+    int chunkSize = Block.defaultStreamChunkSize,
+  }) async* {
+    if (chunkSize <= 0) {
+      throw ArgumentError.value(
+        chunkSize,
+        'chunkSize',
+        'must be greater than 0',
+      );
+    }
+
+    streamCalls++;
+    for (final chunk in _chunks) {
+      yield chunk;
+    }
+  }
 }
