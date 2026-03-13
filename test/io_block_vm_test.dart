@@ -284,8 +284,15 @@ void main() {
           expect(block.size, equals(data.length));
           expect(await _countOpenDescriptorsFor(file), equals(baseline));
 
-          await block.arrayBuffer();
-          expect(await _countOpenDescriptorsFor(file), greaterThanOrEqualTo(1));
+          expect(await block.arrayBuffer(), equals(data));
+          expect(await _countOpenDescriptorsFor(file), equals(baseline));
+
+          final streamed = <int>[];
+          await for (final chunk in block.stream(chunkSize: 1024)) {
+            streamed.addAll(chunk);
+          }
+          expect(streamed, equals(data));
+          expect(await _countOpenDescriptorsFor(file), equals(baseline));
         });
       },
     );

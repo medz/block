@@ -367,22 +367,62 @@ final class _IoFileRefBlock extends BlockBase implements _IoReadable {
 
   @override
   Future<Uint8List> arrayBuffer() async {
-    final opened = await ensureMaterialized();
-    return opened.arrayBuffer();
+    final opened = _opened;
+    if (opened != null) {
+      return (await opened).arrayBuffer();
+    }
+
+    return _readDirect(_offset, _length);
   }
 
   @override
   Stream<Uint8List> stream({
     int chunkSize = Block.defaultStreamChunkSize,
   }) async* {
-    final opened = await ensureMaterialized();
-    yield* opened.stream(chunkSize: chunkSize);
+    final opened = _opened;
+    if (opened != null) {
+      yield* (await opened).stream(chunkSize: chunkSize);
+      return;
+    }
+
+    validateChunkSize(chunkSize);
+    if (_length == 0) {
+      return;
+    }
+
+    final raf = await _file.open(mode: FileMode.read);
+    try {
+      await raf.setPosition(_offset);
+      var remaining = _length;
+      while (remaining > 0) {
+        final toRead = min(chunkSize, remaining);
+        final chunk = await raf.read(toRead);
+        if (chunk.isEmpty) {
+          throw StateError(
+            'Unexpected end of file while streaming ${_file.path}.',
+          );
+        }
+        yield chunk;
+        remaining -= chunk.length;
+      }
+    } finally {
+      try {
+        await raf.close();
+      } catch (_) {
+        // Best-effort cleanup.
+      }
+    }
   }
 
   @override
   Future<Uint8List> readRange(int offset, int length) async {
-    final opened = await ensureMaterialized();
-    return opened.readRange(offset, length);
+    final opened = _opened;
+    if (opened != null) {
+      return (await opened).readRange(offset, length);
+    }
+
+    _validateRange(_length, offset, length);
+    return _readDirect(_offset + offset, length);
   }
 
   @override
@@ -394,6 +434,31 @@ final class _IoFileRefBlock extends BlockBase implements _IoReadable {
       length: _length,
       type: _type,
     );
+  }
+
+  Future<Uint8List> _readDirect(int offset, int length) async {
+    if (length == 0) {
+      return Uint8List(0);
+    }
+
+    final raf = await _file.open(mode: FileMode.read);
+    try {
+      await raf.setPosition(offset);
+      final bytes = await raf.read(length);
+      if (bytes.length != length) {
+        throw StateError(
+          'Unexpected end of file while reading $length bytes from '
+          '${_file.path}.',
+        );
+      }
+      return bytes;
+    } finally {
+      try {
+        await raf.close();
+      } catch (_) {
+        // Best-effort cleanup.
+      }
+    }
   }
 }
 
