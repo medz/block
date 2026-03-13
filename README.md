@@ -10,6 +10,7 @@
 - One minimal, Blob-compatible API surface.
 - `web`: wraps native browser `Blob` via [`package:web`](https://pub.dev/packages/web).
 - `io`: keeps small byte-only blocks in memory and lazily materializes larger/composed blocks to temp files (finalizer cleanup).
+- `stream()` is the primary lazy read path; `arrayBuffer()` is the explicit materialized read path.
 - `Block` parts are resolved lazily for `io` composed blocks: bytes are fetched/materialized on first read (`arrayBuffer`/`text`).
 - `slice()` strategy on `io`:
   - `<= 64KB`: copy to a new temp file
@@ -45,6 +46,10 @@ Future<void> main() async {
   }
 }
 ```
+
+For downstream runtimes and fetch-style abstractions, prefer `stream()` when
+you want to preserve a lazy pipeline. `arrayBuffer()` intentionally
+materializes the entire block in memory.
 
 Supported constructor part types:
 

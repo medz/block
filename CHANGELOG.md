@@ -1,3 +1,10 @@
+## Unreleased
+
+- Make the internal `BlockBase` default read path stream-first so fallback
+  `arrayBuffer()` materializes from `stream()` instead of the reverse.
+- Document `stream()` as the preferred lazy integration path for downstream
+  runtimes.
+
 ## 1.1.0
 
 _Released: 2026-02-24_
