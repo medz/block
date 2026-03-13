@@ -261,6 +261,34 @@ void main() {
         expect(await file.exists(), isTrue);
       });
     });
+
+    test(
+      'Block constructor does not open File parts until first read',
+      () async {
+        if (!_canInspectOpenFiles()) {
+          return;
+        }
+
+        await _withIsolatedSystemTemp((tempDir) async {
+          final data = Uint8List.fromList(
+            List<int>.generate(4 * 1024, (i) => i % 256),
+          );
+          final file = File(
+            '${tempDir.path}${Platform.pathSeparator}source_lazy_fd.bin',
+          );
+          await file.writeAsBytes(data);
+
+          final baseline = await _countOpenDescriptorsFor(file);
+          final block = Block(<Object>[file]);
+
+          expect(block.size, equals(data.length));
+          expect(await _countOpenDescriptorsFor(file), equals(baseline));
+
+          await block.arrayBuffer();
+          expect(await _countOpenDescriptorsFor(file), greaterThanOrEqualTo(1));
+        });
+      },
+    );
   });
 }
 
@@ -305,4 +333,24 @@ String _basename(String path) {
     return path;
   }
   return path.substring(separatorIndex + 1);
+}
+
+bool _canInspectOpenFiles() {
+  try {
+    final result = Process.runSync('which', const ['lsof']);
+    return result.exitCode == 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+Future<int> _countOpenDescriptorsFor(File file) async {
+  final resolvedPath = await file.resolveSymbolicLinks();
+  final result = await Process.run('lsof', ['-p', '$pid']);
+  if (result.exitCode != 0) {
+    throw StateError('Failed to inspect open files: ${result.stderr}');
+  }
+
+  final output = '${result.stdout}';
+  return output.split('\n').where((line) => line.contains(resolvedPath)).length;
 }

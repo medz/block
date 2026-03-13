@@ -118,15 +118,8 @@ final class _IoBacking {
     }
   }
 
-  static Future<_IoBacking> fromFile(File file) async {
-    final totalSize = await file.length();
+  static Future<_IoBacking> fromFileWithSize(File file, int totalSize) async {
     final reader = await file.open(mode: FileMode.read);
-    return _IoBacking._(file, reader, totalSize, deleteOnCleanup: false);
-  }
-
-  static _IoBacking fromFileSync(File file) {
-    final totalSize = file.lengthSync();
-    final reader = file.openSync(mode: FileMode.read);
     return _IoBacking._(file, reader, totalSize, deleteOnCleanup: false);
   }
 
@@ -258,8 +251,14 @@ final class FileBlock extends BlockBase implements _IoReadable {
 
   /// Opens an entire [file] as a lazy, file-backed [Block].
   static Future<FileBlock> open(File file, {String type = ''}) async {
-    final backing = await _IoBacking.fromFile(file);
-    return FileBlock._(backing, 0, backing.totalSize, type);
+    final totalSize = await file.length();
+    return _openWithKnownSize(
+      file,
+      totalSize: totalSize,
+      offset: 0,
+      length: totalSize,
+      type: type,
+    );
   }
 
   /// Opens a byte range of [file] as a lazy, file-backed [Block].
@@ -271,7 +270,23 @@ final class FileBlock extends BlockBase implements _IoReadable {
   }) async {
     final totalSize = await file.length();
     _validateRange(totalSize, offset, length);
-    final backing = await _IoBacking.fromFile(file);
+    return _openWithKnownSize(
+      file,
+      totalSize: totalSize,
+      offset: offset,
+      length: length,
+      type: type,
+    );
+  }
+
+  static Future<FileBlock> _openWithKnownSize(
+    File file, {
+    required int totalSize,
+    required int offset,
+    required int length,
+    required String type,
+  }) async {
+    final backing = await _IoBacking.fromFileWithSize(file, totalSize);
     return FileBlock._(backing, offset, length, type);
   }
 
@@ -313,6 +328,73 @@ final class FileBlock extends BlockBase implements _IoReadable {
 
   @override
   Future<FileBlock> ensureMaterialized() async => this;
+}
+
+final class _IoFileRefBlock extends BlockBase implements _IoReadable {
+  _IoFileRefBlock(
+    this._file,
+    this._fileSize,
+    this._offset,
+    this._length,
+    this._type,
+  );
+
+  final File _file;
+  final int _fileSize;
+  final int _offset;
+  final int _length;
+  final String _type;
+
+  Future<FileBlock>? _opened;
+
+  @override
+  int get size => _length;
+
+  @override
+  String get type => _type;
+
+  @override
+  Block slice(int start, [int? end, String? contentType]) {
+    final bounds = normalizeSliceBounds(_length, start, end);
+    return _IoFileRefBlock(
+      _file,
+      _fileSize,
+      _offset + bounds.start,
+      bounds.length,
+      contentType ?? '',
+    );
+  }
+
+  @override
+  Future<Uint8List> arrayBuffer() async {
+    final opened = await ensureMaterialized();
+    return opened.arrayBuffer();
+  }
+
+  @override
+  Stream<Uint8List> stream({
+    int chunkSize = Block.defaultStreamChunkSize,
+  }) async* {
+    final opened = await ensureMaterialized();
+    yield* opened.stream(chunkSize: chunkSize);
+  }
+
+  @override
+  Future<Uint8List> readRange(int offset, int length) async {
+    final opened = await ensureMaterialized();
+    return opened.readRange(offset, length);
+  }
+
+  @override
+  Future<FileBlock> ensureMaterialized() {
+    return _opened ??= FileBlock._openWithKnownSize(
+      _file,
+      totalSize: _fileSize,
+      offset: _offset,
+      length: _length,
+      type: _type,
+    );
+  }
 }
 
 final class _IoLazyBlock extends BlockBase implements _IoReadable {
@@ -554,10 +636,10 @@ _BlockPart _normalizePart(Object part) {
   }
 
   if (part is File) {
-    final backing = _IoBacking.fromFileSync(part);
+    final fileSize = part.lengthSync();
     return (
-      block: FileBlock._(backing, 0, backing.totalSize, ''),
-      length: backing.totalSize,
+      block: _IoFileRefBlock(part, fileSize, 0, fileSize, ''),
+      length: fileSize,
     );
   }
 
