@@ -233,6 +233,30 @@ void main() {
       });
     });
 
+    test('many-part slices read across composed ranges', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        final data = Uint8List.fromList(
+          List<int>.generate(128 * 1024, (i) => i % 256),
+        );
+        final parts = List<Object>.generate(
+          128,
+          (index) =>
+              Uint8List.sublistView(data, index * 1024, (index + 1) * 1024),
+          growable: false,
+        );
+
+        final block = Block(parts);
+        final start = (100 * 1024) + 900;
+        final end = start + 5000;
+        final slice = block.slice(start, end);
+
+        expect(block.size, equals(data.length));
+        expect(_countBlockTempFiles(tempDir), equals(0));
+        expect(await slice.arrayBuffer(), equals(data.sublist(start, end)));
+        expect(_countBlockTempFiles(tempDir), equals(1));
+      });
+    });
+
     test('Block constructor accepts File parts lazily on IO', () async {
       await _withIsolatedSystemTemp((tempDir) async {
         final data = Uint8List.fromList(
