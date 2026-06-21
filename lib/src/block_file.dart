@@ -460,7 +460,6 @@ final class _IoFileRefBlock extends BlockBase implements _IoReadable {
 final class _IoLazyBlock extends BlockBase implements _IoReadable {
   _IoLazyBlock._fromParts(List<_BlockPart> parts, this._length, this._type)
     : _parts = parts,
-      _partIndex = _IoPartIndex(parts),
       _source = null,
       _sourceOffset = 0;
 
@@ -469,8 +468,7 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
     this._sourceOffset,
     this._length,
     this._type,
-  ) : _parts = null,
-      _partIndex = null;
+  ) : _parts = null;
 
   factory _IoLazyBlock._fromSource(
     _IoReadable source,
@@ -496,12 +494,13 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
   }
 
   final List<_BlockPart>? _parts;
-  final _IoPartIndex? _partIndex;
   final _IoReadable? _source;
   final int _sourceOffset;
   final int _length;
   final String _type;
 
+  _IoPartIndex? _partIndex;
+  Uint8List? _smallSourceBytes;
   FileBlock? _materialized;
   Future<FileBlock>? _materializing;
 
@@ -531,6 +530,17 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
 
   @override
   Future<Uint8List> arrayBuffer() async {
+    if (!_isComposed && _length <= _sliceCopyThreshold) {
+      final cached = _smallSourceBytes;
+      if (cached != null) {
+        return cached;
+      }
+
+      final bytes = await _source!.readRange(_sourceOffset, _length);
+      _smallSourceBytes = bytes;
+      return bytes;
+    }
+
     final materialized = await ensureMaterialized();
     return materialized.arrayBuffer();
   }
@@ -541,7 +551,7 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
   }) async* {
     if (_isComposed) {
       validateChunkSize(chunkSize);
-      for (final part in _partIndex!.parts) {
+      for (final part in _parts!) {
         yield* part.block.stream(chunkSize: chunkSize);
       }
       return;
@@ -627,7 +637,7 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
     var outputOffset = 0;
     var remainingLength = length;
 
-    final partIndex = _partIndex!;
+    final partIndex = _partIndex ??= _IoPartIndex(_parts!);
     var index = partIndex.findPartIndex(offset);
     var absoluteOffset = offset;
 

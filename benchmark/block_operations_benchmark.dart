@@ -9,7 +9,7 @@ List<BenchmarkScenario> buildOperationScenarios() {
 
   return <BenchmarkScenario>[
     BenchmarkScenario.sync(
-      name: 'slice/copy_64kb',
+      name: 'slice/small_64kb',
       category: 'Slice',
       iterations: 400,
       bytesPerIteration: 64 * 1024,

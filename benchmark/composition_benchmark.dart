@@ -73,7 +73,7 @@ List<BenchmarkScenario> buildCompositionScenarios() {
       category: 'Range',
       iterations: 96,
       bytesPerIteration: 4 * 1024,
-      maxIterationsPerProcess: 48,
+      // Keep the deterministic offset sequence in one worker process.
       action: () async {
         final offset =
             random4kbOffsets[random4kbIndex++ % random4kbOffsets.length];
@@ -90,7 +90,6 @@ List<BenchmarkScenario> buildCompositionScenarios() {
       category: 'Range',
       iterations: 48,
       bytesPerIteration: 64 * 1024,
-      maxIterationsPerProcess: 24,
       action: () async {
         final offset =
             random64kbOffsets[random64kbIndex++ % random64kbOffsets.length];

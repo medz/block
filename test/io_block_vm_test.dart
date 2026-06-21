@@ -54,10 +54,10 @@ void main() {
         expect(_countBlockTempFiles(tempDir), equals(0));
 
         expect(await slice.text(), equals('child'));
-        expect(_countBlockTempFiles(tempDir), equals(1));
+        expect(_countBlockTempFiles(tempDir), equals(0));
 
         expect(await parent.text(), equals('[child]'));
-        expect(_countBlockTempFiles(tempDir), equals(2));
+        expect(_countBlockTempFiles(tempDir), equals(1));
       });
     });
 
@@ -87,7 +87,7 @@ void main() {
       },
     );
 
-    test('slice <= 64KB copies into a new temp file', () async {
+    test('slice <= 64KB arrayBuffer reads without temp files', () async {
       await _withIsolatedSystemTemp((tempDir) async {
         final data = Uint8List.fromList(
           List<int>.generate(200 * 1024, (i) => i % 256),
@@ -99,10 +99,10 @@ void main() {
 
         final bytes = await child.arrayBuffer();
         expect(bytes, equals(data.sublist(1024, 2048)));
-        expect(_countBlockTempFiles(tempDir), equals(1));
+        expect(_countBlockTempFiles(tempDir), equals(0));
 
         await parent.arrayBuffer();
-        expect(_countBlockTempFiles(tempDir), equals(2));
+        expect(_countBlockTempFiles(tempDir), equals(1));
       });
     });
 
@@ -253,7 +253,7 @@ void main() {
         expect(block.size, equals(data.length));
         expect(_countBlockTempFiles(tempDir), equals(0));
         expect(await slice.arrayBuffer(), equals(data.sublist(start, end)));
-        expect(_countBlockTempFiles(tempDir), equals(1));
+        expect(_countBlockTempFiles(tempDir), equals(0));
       });
     });
 
