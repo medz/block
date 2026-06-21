@@ -1,5 +1,27 @@
 ## Unreleased
 
+## 1.3.0
+
+_Released: 2026-06-21_
+
+### Performance
+
+- Optimize IO composed range reads with a lazy part index and direct memory-part
+  copies, reducing many-part 4KB range reads from 283.59 us to 6.10 us and
+  many-part 64KB range reads from 514.46 us to 22.90 us in the package
+  benchmarks.
+- Coalesce small chunks when streaming many-part composed blocks, reducing the
+  many-part 4MB stream benchmark from 3246.58 us to 1015.25 us.
+- Flatten nested IO composed parts during normalization to reduce composed
+  stream/generator overhead.
+
+### Resource usage
+
+- Avoid temp-file materialization for many-part range reads; the measured
+  many-part range benchmarks now report zero temp files per iteration.
+- Stream direct `File` parts without retaining an extra backing file handle for
+  stream-only reads.
+
 ## 1.2.0
 
 _Released: 2026-03-13_
