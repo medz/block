@@ -233,35 +233,14 @@ final class _IoBacking {
     int offset,
     int length, {
     required int chunkSize,
-  }) async* {
-    validateChunkSize(chunkSize);
-    _validateRange(totalSize, offset, length);
-    if (length == 0) {
-      return;
-    }
-
-    final raf = await file.open(mode: FileMode.read);
-    try {
-      await raf.setPosition(offset);
-      var remaining = length;
-      while (remaining > 0) {
-        final toRead = min(chunkSize, remaining);
-        final chunk = await raf.read(toRead);
-        if (chunk.isEmpty) {
-          throw StateError(
-            'Unexpected end of file while streaming ${file.path}.',
-          );
-        }
-        yield chunk;
-        remaining -= chunk.length;
-      }
-    } finally {
-      try {
-        await raf.close();
-      } catch (_) {
-        // Best-effort cleanup.
-      }
-    }
+  }) {
+    return _streamFileRange(
+      file,
+      totalSize,
+      offset,
+      length,
+      chunkSize: chunkSize,
+    );
   }
 
   Future<T> _enqueue<T>(Future<T> Function() action) {
@@ -453,11 +432,14 @@ final class _IoFileRefBlock extends BlockBase implements _IoReadable {
   }
 
   @override
-  Stream<Uint8List> stream({
-    int chunkSize = Block.defaultStreamChunkSize,
-  }) async* {
-    final opened = await ensureMaterialized();
-    yield* opened.stream(chunkSize: chunkSize);
+  Stream<Uint8List> stream({int chunkSize = Block.defaultStreamChunkSize}) {
+    return _streamFileRange(
+      _file,
+      _fileSize,
+      _offset,
+      _length,
+      chunkSize: chunkSize,
+    );
   }
 
   @override
@@ -832,6 +814,43 @@ Future<Uint8List> _readBlockRange(Block block, int offset, int length) {
   }
 
   return block.slice(offset, offset + length).arrayBuffer();
+}
+
+Stream<Uint8List> _streamFileRange(
+  File file,
+  int totalSize,
+  int offset,
+  int length, {
+  required int chunkSize,
+}) async* {
+  validateChunkSize(chunkSize);
+  _validateRange(totalSize, offset, length);
+  if (length == 0) {
+    return;
+  }
+
+  final raf = await file.open(mode: FileMode.read);
+  try {
+    await raf.setPosition(offset);
+    var remaining = length;
+    while (remaining > 0) {
+      final toRead = min(chunkSize, remaining);
+      final chunk = await raf.read(toRead);
+      if (chunk.isEmpty) {
+        throw StateError(
+          'Unexpected end of file while streaming ${file.path}.',
+        );
+      }
+      yield chunk;
+      remaining -= chunk.length;
+    }
+  } finally {
+    try {
+      await raf.close();
+    } catch (_) {
+      // Best-effort cleanup.
+    }
+  }
 }
 
 void _validateRange(int totalSize, int offset, int length) {

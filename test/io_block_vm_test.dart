@@ -334,6 +334,36 @@ void main() {
         });
       },
     );
+
+    test('streaming File parts closes source file descriptors', () async {
+      if (!_canInspectOpenFiles()) {
+        return;
+      }
+
+      await _withIsolatedSystemTemp((tempDir) async {
+        final data = Uint8List.fromList(
+          List<int>.generate(32 * 1024, (i) => i % 256),
+        );
+        final file = File(
+          '${tempDir.path}${Platform.pathSeparator}source_stream_fd.bin',
+        );
+        await file.writeAsBytes(data);
+
+        final baseline = await _countOpenDescriptorsFor(file);
+        final block = Block(<Object>['[', file, ']']);
+
+        final streamed = <int>[];
+        await for (final chunk in block.stream(chunkSize: 4096)) {
+          streamed.addAll(chunk);
+        }
+
+        expect(
+          streamed,
+          equals(<int>['['.codeUnitAt(0), ...data, ']'.codeUnitAt(0)]),
+        );
+        expect(await _countOpenDescriptorsFor(file), equals(baseline));
+      });
+    });
   });
 }
 
