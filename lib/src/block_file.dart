@@ -676,8 +676,18 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
       final localStart = absoluteOffset - partIndex.startAt(index);
       final available = part.length - localStart;
       final take = min(available, remainingLength);
-      final segment = await _readBlockRange(part.block, localStart, take);
-      output.setRange(outputOffset, outputOffset + take, segment);
+      final block = part.block;
+      if (block is MemoryBlock) {
+        output.setRange(
+          outputOffset,
+          outputOffset + take,
+          block.copyBytesSync(),
+          localStart,
+        );
+      } else {
+        final segment = await _readBlockRange(block, localStart, take);
+        output.setRange(outputOffset, outputOffset + take, segment);
+      }
 
       outputOffset += take;
       remainingLength -= take;
