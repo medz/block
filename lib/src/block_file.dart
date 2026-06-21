@@ -55,6 +55,47 @@ final class _IoPartIndex {
   }
 }
 
+final class _ChunkCoalescer {
+  _ChunkCoalescer(this.chunkSize);
+
+  final int chunkSize;
+  final BytesBuilder _builder = BytesBuilder(copy: false);
+
+  Iterable<Uint8List> add(Uint8List chunk) sync* {
+    if (chunk.isEmpty) {
+      return;
+    }
+
+    var offset = 0;
+    while (offset < chunk.length) {
+      if (_builder.length == 0) {
+        final remaining = chunk.length - offset;
+        if (remaining >= chunkSize) {
+          final next = offset + chunkSize;
+          yield Uint8List.sublistView(chunk, offset, next);
+          offset = next;
+          continue;
+        }
+      }
+
+      final take = min(chunkSize - _builder.length, chunk.length - offset);
+      _builder.add(Uint8List.sublistView(chunk, offset, offset + take));
+      offset += take;
+
+      if (_builder.length == chunkSize) {
+        yield _builder.takeBytes();
+      }
+    }
+  }
+
+  Uint8List? finish() {
+    if (_builder.length == 0) {
+      return null;
+    }
+    return _builder.takeBytes();
+  }
+}
+
 Block createBlock(List<Object> parts, {String type = ''}) {
   final memory = MemoryBlock.tryFromParts(
     parts,
@@ -192,35 +233,14 @@ final class _IoBacking {
     int offset,
     int length, {
     required int chunkSize,
-  }) async* {
-    validateChunkSize(chunkSize);
-    _validateRange(totalSize, offset, length);
-    if (length == 0) {
-      return;
-    }
-
-    final raf = await file.open(mode: FileMode.read);
-    try {
-      await raf.setPosition(offset);
-      var remaining = length;
-      while (remaining > 0) {
-        final toRead = min(chunkSize, remaining);
-        final chunk = await raf.read(toRead);
-        if (chunk.isEmpty) {
-          throw StateError(
-            'Unexpected end of file while streaming ${file.path}.',
-          );
-        }
-        yield chunk;
-        remaining -= chunk.length;
-      }
-    } finally {
-      try {
-        await raf.close();
-      } catch (_) {
-        // Best-effort cleanup.
-      }
-    }
+  }) {
+    return _streamFileRange(
+      file,
+      totalSize,
+      offset,
+      length,
+      chunkSize: chunkSize,
+    );
   }
 
   Future<T> _enqueue<T>(Future<T> Function() action) {
@@ -412,11 +432,14 @@ final class _IoFileRefBlock extends BlockBase implements _IoReadable {
   }
 
   @override
-  Stream<Uint8List> stream({
-    int chunkSize = Block.defaultStreamChunkSize,
-  }) async* {
-    final opened = await ensureMaterialized();
-    yield* opened.stream(chunkSize: chunkSize);
+  Stream<Uint8List> stream({int chunkSize = Block.defaultStreamChunkSize}) {
+    return _streamFileRange(
+      _file,
+      _fileSize,
+      _offset,
+      _length,
+      chunkSize: chunkSize,
+    );
   }
 
   @override
@@ -551,14 +574,17 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
   }) async* {
     if (_isComposed) {
       validateChunkSize(chunkSize);
-      for (final part in _parts!) {
-        yield* part.block.stream(chunkSize: chunkSize);
+      if (_shouldCoalesceComposedStream(chunkSize)) {
+        yield* _streamComposedParts(chunkSize: chunkSize);
+      } else {
+        for (final part in _parts!) {
+          yield* part.block.stream(chunkSize: chunkSize);
+        }
       }
-      return;
+    } else {
+      final materialized = await ensureMaterialized();
+      yield* materialized.stream(chunkSize: chunkSize);
     }
-
-    final materialized = await ensureMaterialized();
-    yield* materialized.stream(chunkSize: chunkSize);
   }
 
   @override
@@ -650,8 +676,18 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
       final localStart = absoluteOffset - partIndex.startAt(index);
       final available = part.length - localStart;
       final take = min(available, remainingLength);
-      final segment = await _readBlockRange(part.block, localStart, take);
-      output.setRange(outputOffset, outputOffset + take, segment);
+      final block = part.block;
+      if (block is MemoryBlock) {
+        output.setRange(
+          outputOffset,
+          outputOffset + take,
+          block.copyBytesSync(),
+          localStart,
+        );
+      } else {
+        final segment = await _readBlockRange(block, localStart, take);
+        output.setRange(outputOffset, outputOffset + take, segment);
+      }
 
       outputOffset += take;
       remainingLength -= take;
@@ -660,6 +696,36 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
     }
 
     return output;
+  }
+
+  bool _shouldCoalesceComposedStream(int chunkSize) {
+    final parts = _parts!;
+    return parts.length > 8 && _length < chunkSize * parts.length;
+  }
+
+  Stream<Uint8List> _streamComposedParts({required int chunkSize}) async* {
+    final coalescer = _ChunkCoalescer(chunkSize);
+
+    for (final part in _parts!) {
+      final block = part.block;
+      if (block is MemoryBlock) {
+        for (final chunk in coalescer.add(block.copyBytesSync())) {
+          yield chunk;
+        }
+        continue;
+      }
+
+      await for (final chunk in block.stream(chunkSize: chunkSize)) {
+        for (final output in coalescer.add(chunk)) {
+          yield output;
+        }
+      }
+    }
+
+    final trailing = coalescer.finish();
+    if (trailing != null) {
+      yield trailing;
+    }
   }
 }
 
@@ -677,7 +743,15 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
       continue;
     }
 
-    normalized.add(normalizedPart);
+    final block = normalizedPart.block;
+    if (block is _IoLazyBlock &&
+        block._isComposed &&
+        block._materialized == null &&
+        block._materializing == null) {
+      normalized.addAll(block._parts!);
+    } else {
+      normalized.add(normalizedPart);
+    }
     totalSize += normalizedPart.length;
   }
 
@@ -741,6 +815,43 @@ Future<Uint8List> _readBlockRange(Block block, int offset, int length) {
   }
 
   return block.slice(offset, offset + length).arrayBuffer();
+}
+
+Stream<Uint8List> _streamFileRange(
+  File file,
+  int totalSize,
+  int offset,
+  int length, {
+  required int chunkSize,
+}) async* {
+  validateChunkSize(chunkSize);
+  _validateRange(totalSize, offset, length);
+  if (length == 0) {
+    return;
+  }
+
+  final raf = await file.open(mode: FileMode.read);
+  try {
+    await raf.setPosition(offset);
+    var remaining = length;
+    while (remaining > 0) {
+      final toRead = min(chunkSize, remaining);
+      final chunk = await raf.read(toRead);
+      if (chunk.isEmpty) {
+        throw StateError(
+          'Unexpected end of file while streaming ${file.path}.',
+        );
+      }
+      yield chunk;
+      remaining -= chunk.length;
+    }
+  } finally {
+    try {
+      await raf.close();
+    } catch (_) {
+      // Best-effort cleanup.
+    }
+  }
 }
 
 void _validateRange(int totalSize, int offset, int length) {
