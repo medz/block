@@ -533,11 +533,11 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
     if (!_isComposed && _length <= _sliceCopyThreshold) {
       final cached = _smallSourceBytes;
       if (cached != null) {
-        return cached;
+        return Uint8List.fromList(cached);
       }
 
       final bytes = await _source!.readRange(_sourceOffset, _length);
-      _smallSourceBytes = bytes;
+      _smallSourceBytes = Uint8List.fromList(bytes);
       return bytes;
     }
 

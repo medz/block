@@ -106,6 +106,22 @@ void main() {
       });
     });
 
+    test('slice <= 64KB cached bytes stay immutable across reads', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        final data = Uint8List.fromList(
+          List<int>.generate(200 * 1024, (i) => i % 256),
+        );
+        final child = Block(<Object>[data]).slice(1024, 1024 + 1024);
+
+        final first = await child.arrayBuffer();
+        first[0] = 42;
+
+        final second = await child.arrayBuffer();
+        expect(second, equals(data.sublist(1024, 2048)));
+        expect(_countBlockTempFiles(tempDir), equals(0));
+      });
+    });
+
     test('slice > 64KB shares parent materialized file', () async {
       await _withIsolatedSystemTemp((tempDir) async {
         final data = Uint8List.fromList(
