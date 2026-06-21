@@ -751,7 +751,12 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
       continue;
     }
 
-    normalized.add(normalizedPart);
+    final flattenedParts = _flattenedComposedParts(normalizedPart.block);
+    if (flattenedParts == null) {
+      normalized.add(normalizedPart);
+    } else {
+      normalized.addAll(flattenedParts);
+    }
     totalSize += normalizedPart.length;
   }
 
@@ -759,6 +764,18 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
     parts: List<_BlockPart>.unmodifiable(normalized),
     totalSize: totalSize,
   );
+}
+
+List<_BlockPart>? _flattenedComposedParts(Block block) {
+  if (block is! _IoLazyBlock || !block._isComposed) {
+    return null;
+  }
+
+  if (block._materialized != null || block._materializing != null) {
+    return null;
+  }
+
+  return block._parts;
 }
 
 _BlockPart _normalizePart(Object part) {
