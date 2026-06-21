@@ -20,7 +20,7 @@ Coverage:
 
 - Creation (`create/single_part_4kb`, `create/single_part_1mb`)
 - Concatenation (`concat/bytes_4x256kb`, `concat/blocks_4x256kb`)
-- Slice threshold paths (`slice/copy_64kb`, `slice/share_256kb`)
+- Slice threshold paths (`slice/small_64kb`, `slice/share_256kb`)
 - Read APIs (`read/array_buffer_8mb`, `read/text_decode_1mb`)
 - Stream APIs (`stream/read_8mb_chunk64kb`, `stream/nested_read_4mb_chunk128kb`)
 - Composition (`compose/from_nested_blocks_4mb`)

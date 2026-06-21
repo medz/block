@@ -9,12 +9,12 @@
 
 - One minimal, Blob-compatible API surface.
 - `web`: wraps native browser `Blob` via [`package:web`](https://pub.dev/packages/web).
-- `io`: keeps small byte-only blocks in memory and lazily materializes larger/composed blocks to temp files (finalizer cleanup).
+- `io`: keeps small byte-only blocks in memory and lazily materializes file-backed views only when needed (finalizer cleanup).
 - `stream()` is the primary lazy read path; `arrayBuffer()` is the explicit materialized read path.
 - `Block` parts are resolved lazily for `io` composed blocks: bytes are fetched/materialized on first read (`arrayBuffer`/`text`).
 - `slice()` strategy on `io`:
-  - `<= 64KB`: copy to a new temp file
-  - `> 64KB`: share backing file with offset/length view
+  - `<= 64KB`: `arrayBuffer()` reads the source range directly and caches bytes on the slice
+  - `> 64KB`: share backing file with offset/length view when materialized
 
 ## Installation
 

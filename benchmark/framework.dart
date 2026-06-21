@@ -1,3 +1,4 @@
+import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -182,6 +183,16 @@ final class BenchmarkEnvironment {
   final String dartVersion;
   final int cpuCount;
   final String tempDirectory;
+
+  Map<String, Object?> toJson() {
+    return {
+      'os': os,
+      'os_version': osVersion,
+      'dart_version': dartVersion,
+      'cpu_count': cpuCount,
+      'temp_directory': tempDirectory,
+    };
+  }
 }
 
 final class BenchmarkRun {
@@ -194,59 +205,115 @@ final class BenchmarkRun {
   final DateTime generatedAtUtc;
   final BenchmarkEnvironment environment;
   final List<BenchmarkScenarioResult> scenarios;
+
+  Map<String, Object?> toJson() {
+    return {
+      'generated_at_utc': generatedAtUtc.toIso8601String(),
+      'environment': environment.toJson(),
+      'scenarios': [for (final scenario in scenarios) scenario.toJson()],
+    };
+  }
 }
 
-Future<BenchmarkScenarioResult> runScenario(BenchmarkScenario scenario) async {
+Future<BenchmarkScenarioResult> runScenario(
+  BenchmarkScenario scenario, {
+  bool useTimeline = false,
+}) async {
   const tempPrefix = 'block_io_';
+  final task = useTimeline
+      ? developer.TimelineTask(filterKey: 'block.benchmark')
+      : null;
   final tempFilesBefore = _countTempFilesWithPrefix(tempPrefix);
   final rssBefore = _safeCurrentRss();
   var rssPeak = rssBefore;
 
-  for (var i = 0; i < scenario.warmup; i++) {
-    await scenario.action();
-    final rssNow = _safeCurrentRss();
-    if (rssNow > rssPeak) {
-      rssPeak = rssNow;
-    }
-  }
-
-  final iterationUs = <double>[];
-  for (var i = 0; i < scenario.iterations; i++) {
-    final watch = Stopwatch()..start();
-    await scenario.action();
-    watch.stop();
-    iterationUs.add(watch.elapsedMicroseconds.toDouble());
-
-    final rssNow = _safeCurrentRss();
-    if (rssNow > rssPeak) {
-      rssPeak = rssNow;
-    }
-  }
-
-  final totalUs = iterationUs.fold<double>(0, (sum, current) => sum + current);
-  final sortedLatencies = iterationUs.toList()..sort();
-  final tempFilesAfter = _countTempFilesWithPrefix(tempPrefix);
-  final rssAfter = _safeCurrentRss();
-
-  return BenchmarkScenarioResult(
-    name: scenario.name,
-    category: scenario.category,
-    iterations: scenario.iterations,
-    warmup: scenario.warmup,
-    totalUs: totalUs,
-    avgUs: scenario.iterations == 0 ? 0 : totalUs / scenario.iterations,
-    p50Us: _percentile(sortedLatencies, 0.50),
-    p95Us: _percentile(sortedLatencies, 0.95),
-    p99Us: _percentile(sortedLatencies, 0.99),
-    bytesPerIteration: scenario.bytesPerIteration,
-    tempFilesBefore: tempFilesBefore,
-    tempFilesAfter: tempFilesAfter,
-    tempFilesDelta: tempFilesAfter - tempFilesBefore,
-    rssBeforeBytes: rssBefore,
-    rssAfterBytes: rssAfter,
-    rssPeakBytes: rssPeak,
-    samplesUs: iterationUs,
+  task?.start(
+    'block.benchmark.scenario',
+    arguments: {
+      'scenario': scenario.name,
+      'category': scenario.category,
+      'iterations': scenario.iterations,
+      'warmup': scenario.warmup,
+    },
   );
+
+  var scenarioFinished = false;
+  try {
+    for (var i = 0; i < scenario.warmup; i++) {
+      await _runScenarioAction(
+        scenario,
+        task: task,
+        phase: 'warmup',
+        iteration: i,
+      );
+      final rssNow = _safeCurrentRss();
+      if (rssNow > rssPeak) {
+        rssPeak = rssNow;
+      }
+    }
+
+    final iterationUs = <double>[];
+    for (var i = 0; i < scenario.iterations; i++) {
+      final watch = Stopwatch()..start();
+      await _runScenarioAction(
+        scenario,
+        task: task,
+        phase: 'iteration',
+        iteration: i,
+      );
+      watch.stop();
+      iterationUs.add(watch.elapsedMicroseconds.toDouble());
+
+      final rssNow = _safeCurrentRss();
+      if (rssNow > rssPeak) {
+        rssPeak = rssNow;
+      }
+    }
+
+    final totalUs = iterationUs.fold<double>(
+      0,
+      (sum, current) => sum + current,
+    );
+    final sortedLatencies = iterationUs.toList()..sort();
+    final tempFilesAfter = _countTempFilesWithPrefix(tempPrefix);
+    final rssAfter = _safeCurrentRss();
+
+    final result = BenchmarkScenarioResult(
+      name: scenario.name,
+      category: scenario.category,
+      iterations: scenario.iterations,
+      warmup: scenario.warmup,
+      totalUs: totalUs,
+      avgUs: scenario.iterations == 0 ? 0 : totalUs / scenario.iterations,
+      p50Us: _percentile(sortedLatencies, 0.50),
+      p95Us: _percentile(sortedLatencies, 0.95),
+      p99Us: _percentile(sortedLatencies, 0.99),
+      bytesPerIteration: scenario.bytesPerIteration,
+      tempFilesBefore: tempFilesBefore,
+      tempFilesAfter: tempFilesAfter,
+      tempFilesDelta: tempFilesAfter - tempFilesBefore,
+      rssBeforeBytes: rssBefore,
+      rssAfterBytes: rssAfter,
+      rssPeakBytes: rssPeak,
+      samplesUs: iterationUs,
+    );
+
+    scenarioFinished = true;
+    task?.finish(
+      arguments: {
+        'avg_us': result.avgUs,
+        'p95_us': result.p95Us,
+        'temp_files_delta': result.tempFilesDelta,
+        'rss_peak_bytes': result.rssPeakBytes,
+      },
+    );
+
+    return result;
+  } finally {
+    if (task != null && !scenarioFinished) {
+      task.finish(arguments: {'failed': true});
+    }
+  }
 }
 
 BenchmarkScenarioResult mergeScenarioChunks(
@@ -312,6 +379,28 @@ Future<BenchmarkRun> runBenchmarks(List<BenchmarkScenario> scenarios) async {
     environment: environment,
     scenarios: results,
   );
+}
+
+Future<void> _runScenarioAction(
+  BenchmarkScenario scenario, {
+  required developer.TimelineTask? task,
+  required String phase,
+  required int iteration,
+}) async {
+  if (task == null) {
+    await scenario.action();
+    return;
+  }
+
+  task.start(
+    'block.benchmark.$phase',
+    arguments: {'scenario': scenario.name, 'iteration': iteration},
+  );
+  try {
+    await scenario.action();
+  } finally {
+    task.finish();
+  }
 }
 
 void printBenchmarkReport(BenchmarkRun run, {bool useColors = true}) {

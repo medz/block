@@ -54,10 +54,10 @@ void main() {
         expect(_countBlockTempFiles(tempDir), equals(0));
 
         expect(await slice.text(), equals('child'));
-        expect(_countBlockTempFiles(tempDir), equals(1));
+        expect(_countBlockTempFiles(tempDir), equals(0));
 
         expect(await parent.text(), equals('[child]'));
-        expect(_countBlockTempFiles(tempDir), equals(2));
+        expect(_countBlockTempFiles(tempDir), equals(1));
       });
     });
 
@@ -87,7 +87,7 @@ void main() {
       },
     );
 
-    test('slice <= 64KB copies into a new temp file', () async {
+    test('slice <= 64KB arrayBuffer reads without temp files', () async {
       await _withIsolatedSystemTemp((tempDir) async {
         final data = Uint8List.fromList(
           List<int>.generate(200 * 1024, (i) => i % 256),
@@ -99,10 +99,26 @@ void main() {
 
         final bytes = await child.arrayBuffer();
         expect(bytes, equals(data.sublist(1024, 2048)));
-        expect(_countBlockTempFiles(tempDir), equals(1));
+        expect(_countBlockTempFiles(tempDir), equals(0));
 
         await parent.arrayBuffer();
-        expect(_countBlockTempFiles(tempDir), equals(2));
+        expect(_countBlockTempFiles(tempDir), equals(1));
+      });
+    });
+
+    test('slice <= 64KB cached bytes stay immutable across reads', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        final data = Uint8List.fromList(
+          List<int>.generate(200 * 1024, (i) => i % 256),
+        );
+        final child = Block(<Object>[data]).slice(1024, 1024 + 1024);
+
+        final first = await child.arrayBuffer();
+        first[0] = 42;
+
+        final second = await child.arrayBuffer();
+        expect(second, equals(data.sublist(1024, 2048)));
+        expect(_countBlockTempFiles(tempDir), equals(0));
       });
     });
 
@@ -230,6 +246,30 @@ void main() {
         expect(streamed, equals(<int>[...data, '!'.codeUnitAt(0)]));
         expect(_countBlockTempFiles(tempDir), equals(0));
         expect(await file.exists(), isTrue);
+      });
+    });
+
+    test('many-part slices read across composed ranges', () async {
+      await _withIsolatedSystemTemp((tempDir) async {
+        final data = Uint8List.fromList(
+          List<int>.generate(128 * 1024, (i) => i % 256),
+        );
+        final parts = List<Object>.generate(
+          128,
+          (index) =>
+              Uint8List.sublistView(data, index * 1024, (index + 1) * 1024),
+          growable: false,
+        );
+
+        final block = Block(parts);
+        final start = (100 * 1024) + 900;
+        final end = start + 5000;
+        final slice = block.slice(start, end);
+
+        expect(block.size, equals(data.length));
+        expect(_countBlockTempFiles(tempDir), equals(0));
+        expect(await slice.arrayBuffer(), equals(data.sublist(start, end)));
+        expect(_countBlockTempFiles(tempDir), equals(0));
       });
     });
 

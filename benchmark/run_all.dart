@@ -12,8 +12,8 @@ import 'framework.dart';
 Future<void> main(List<String> args) async {
   final parsed = Args.parse(
     args,
-    bool: const ['help', 'no-color', 'worker'],
-    string: const ['scenario', 'iterations', 'warmup'],
+    bool: const ['help', 'no-color', 'timeline', 'worker'],
+    string: const ['output', 'scenario', 'iterations', 'warmup'],
     aliases: const {'h': 'help'},
   );
 
@@ -24,10 +24,14 @@ Future<void> main(List<String> args) async {
     print('  dart benchmark/run_all.dart [--no-color]');
     print('');
     print('Options:');
-    print('  --no-color    Disable ANSI styling.');
-    print('  -h, --help    Show this help.');
+    print('  --no-color       Disable ANSI styling.');
+    print('  --output=<path>  Write machine-readable JSON results.');
+    print('  --timeline       Emit dart:developer timeline events.');
+    print('  -h, --help       Show this help.');
     return;
   }
+
+  final useTimeline = (parsed['timeline']?.safeAs<bool>()) ?? false;
 
   final scenarios = <BenchmarkScenario>[
     ...buildCreationScenarios(),
@@ -67,22 +71,31 @@ Future<void> main(List<String> args) async {
       action: source.action,
     );
 
-    final result = await runScenario(workerScenario);
+    final result = await runScenario(workerScenario, useTimeline: useTimeline);
     print('WORKER_RESULT_JSON=${jsonEncode(result.toJson())}');
     return;
   }
 
-  final run = await _runBenchmarksWithWorkers(scenarios);
+  final run = await _runBenchmarksWithWorkers(
+    scenarios,
+    useTimeline: useTimeline,
+  );
 
   printBenchmarkReport(
     run,
     useColors: !((parsed['no-color']?.safeAs<bool>()) ?? false),
   );
+
+  final outputPath = parsed['output']?.safeAs<String>();
+  if (outputPath != null && outputPath.isNotEmpty) {
+    await _writeBenchmarkJson(outputPath, run);
+  }
 }
 
 Future<BenchmarkRun> _runBenchmarksWithWorkers(
-  List<BenchmarkScenario> scenarios,
-) async {
+  List<BenchmarkScenario> scenarios, {
+  required bool useTimeline,
+}) async {
   final environment = BenchmarkEnvironment.capture();
   final results = <BenchmarkScenarioResult>[];
 
@@ -94,6 +107,7 @@ Future<BenchmarkRun> _runBenchmarksWithWorkers(
           scenario: scenario,
           iterations: scenario.iterations,
           warmup: scenario.warmup,
+          useTimeline: useTimeline,
         ),
       );
       continue;
@@ -110,6 +124,7 @@ Future<BenchmarkRun> _runBenchmarksWithWorkers(
           scenario: scenario,
           iterations: chunkIterations,
           warmup: first ? scenario.warmup : 0,
+          useTimeline: useTimeline,
         ),
       );
       remaining -= chunkIterations;
@@ -130,6 +145,7 @@ Future<BenchmarkScenarioResult> _runWorkerChunk({
   required BenchmarkScenario scenario,
   required int iterations,
   required int warmup,
+  required bool useTimeline,
 }) async {
   final scriptPath = Platform.script.toFilePath();
   final workerArgs = <String>[
@@ -141,6 +157,9 @@ Future<BenchmarkScenarioResult> _runWorkerChunk({
     '--warmup=$warmup',
     '--no-color',
   ];
+  if (useTimeline) {
+    workerArgs.add('--timeline');
+  }
 
   final result = await Process.run(
     Platform.resolvedExecutable,
@@ -180,6 +199,17 @@ Future<BenchmarkScenarioResult> _runWorkerChunk({
     return BenchmarkScenarioResult.fromJson(decoded.cast<String, Object?>());
   }
   throw StateError('Unexpected worker payload for ${scenario.name}.');
+}
+
+Future<void> _writeBenchmarkJson(String outputPath, BenchmarkRun run) async {
+  final file = File(outputPath);
+  final parent = file.parent;
+  if (!await parent.exists()) {
+    await parent.create(recursive: true);
+  }
+
+  const encoder = JsonEncoder.withIndent('  ');
+  await file.writeAsString('${encoder.convert(run.toJson())}\n');
 }
 
 int _parseIntArg(String? raw, {required int fallback}) {

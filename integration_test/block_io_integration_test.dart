@@ -33,20 +33,20 @@ void main() {
 
       final smallBytes = await smallSlice.arrayBuffer();
       expect(smallBytes, equals(source.sublist(0, 1024)));
-      expect(_countBlockTempFiles(tempDir), equals(1));
+      expect(_countBlockTempFiles(tempDir), equals(0));
 
       final largeBytes = await largeSlice.arrayBuffer();
       expect(largeBytes, equals(source.sublist(0, 128 * 1024)));
-      expect(_countBlockTempFiles(tempDir), equals(2));
+      expect(_countBlockTempFiles(tempDir), equals(1));
 
       final parentBytes = await block.arrayBuffer();
       expect(parentBytes, equals(source));
-      expect(_countBlockTempFiles(tempDir), equals(2));
+      expect(_countBlockTempFiles(tempDir), equals(1));
 
       final textBlock = Block(<Object>['abc']);
-      expect(_countBlockTempFiles(tempDir), equals(2));
+      expect(_countBlockTempFiles(tempDir), equals(1));
       expect(await textBlock.text(), equals('abc'));
-      expect(_countBlockTempFiles(tempDir), equals(2));
+      expect(_countBlockTempFiles(tempDir), equals(1));
     });
   });
 }

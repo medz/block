@@ -16,6 +16,45 @@ const int _materializeChunkSize = 1024 * 1024;
 
 typedef _BlockPart = ({Block block, int length});
 
+final class _IoPartIndex {
+  _IoPartIndex(this.parts) : _starts = _buildStarts(parts);
+
+  final List<_BlockPart> parts;
+  final List<int> _starts;
+
+  int startAt(int index) => _starts[index];
+
+  int findPartIndex(int offset) {
+    var low = 0;
+    var high = parts.length - 1;
+
+    while (low <= high) {
+      final mid = low + ((high - low) >> 1);
+      final start = _starts[mid];
+      final end = start + parts[mid].length;
+
+      if (offset < start) {
+        high = mid - 1;
+      } else if (offset >= end) {
+        low = mid + 1;
+      } else {
+        return mid;
+      }
+    }
+
+    return parts.length;
+  }
+
+  static List<int> _buildStarts(List<_BlockPart> parts) {
+    var offset = 0;
+    return List<int>.generate(parts.length, (index) {
+      final start = offset;
+      offset += parts[index].length;
+      return start;
+    }, growable: false);
+  }
+}
+
 Block createBlock(List<Object> parts, {String type = ''}) {
   final memory = MemoryBlock.tryFromParts(
     parts,
@@ -419,8 +458,9 @@ final class _IoFileRefBlock extends BlockBase implements _IoReadable {
 }
 
 final class _IoLazyBlock extends BlockBase implements _IoReadable {
-  _IoLazyBlock._fromParts(this._parts, this._length, this._type)
-    : _source = null,
+  _IoLazyBlock._fromParts(List<_BlockPart> parts, this._length, this._type)
+    : _parts = parts,
+      _source = null,
       _sourceOffset = 0;
 
   _IoLazyBlock._fromSourceRaw(
@@ -459,6 +499,8 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
   final int _length;
   final String _type;
 
+  _IoPartIndex? _partIndex;
+  Uint8List? _smallSourceBytes;
   FileBlock? _materialized;
   Future<FileBlock>? _materializing;
 
@@ -488,6 +530,17 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
 
   @override
   Future<Uint8List> arrayBuffer() async {
+    if (!_isComposed && _length <= _sliceCopyThreshold) {
+      final cached = _smallSourceBytes;
+      if (cached != null) {
+        return Uint8List.fromList(cached);
+      }
+
+      final bytes = await _source!.readRange(_sourceOffset, _length);
+      _smallSourceBytes = Uint8List.fromList(bytes);
+      return bytes;
+    }
+
     final materialized = await ensureMaterialized();
     return materialized.arrayBuffer();
   }
@@ -582,20 +635,19 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
 
     final output = Uint8List(length);
     var outputOffset = 0;
-    var remainingSkip = offset;
     var remainingLength = length;
 
-    for (final part in _parts!) {
+    final partIndex = _partIndex ??= _IoPartIndex(_parts!);
+    var index = partIndex.findPartIndex(offset);
+    var absoluteOffset = offset;
+
+    while (index < partIndex.parts.length) {
       if (remainingLength == 0) {
         break;
       }
 
-      if (remainingSkip >= part.length) {
-        remainingSkip -= part.length;
-        continue;
-      }
-
-      final localStart = remainingSkip;
+      final part = partIndex.parts[index];
+      final localStart = absoluteOffset - partIndex.startAt(index);
       final available = part.length - localStart;
       final take = min(available, remainingLength);
       final segment = await _readBlockRange(part.block, localStart, take);
@@ -603,7 +655,8 @@ final class _IoLazyBlock extends BlockBase implements _IoReadable {
 
       outputOffset += take;
       remainingLength -= take;
-      remainingSkip = 0;
+      absoluteOffset += take;
+      index++;
     }
 
     return output;
